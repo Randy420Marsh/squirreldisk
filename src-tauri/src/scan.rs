@@ -79,10 +79,13 @@ pub fn start(
                 }
                 CommandEvent::Terminated(t) => {
                     println!("{t:?}");
-                    // app_handle.unlisten(id);
-                    // child.kill();
                 }
-                _ => unimplemented!(),
+                // The CommandEvent enum is marked non_exhaustive and may grow
+                // new variants in future Tauri versions. Log unknown events
+                // instead of panicking.
+                other => {
+                    eprintln!("unhandled CommandEvent variant: {other:?}");
+                }
             };
             // if let CommandEvent::Stdout(line) = event {
             //     println!("StdErr: {}", line);
@@ -189,14 +192,22 @@ pub fn start(
 }
 
 pub fn stop(state: tauri::State<'_, MyState>) {
-    state
-        .0
-        .lock()
-        .unwrap()
-        .take()
-        .unwrap()
-        .kill()
-        .expect("State is None");
+    // Lock the state and take ownership of the running child (if any).
+    // `stop` may be invoked when nothing is scanning (e.g. on cleanup after
+    // a finished scan) so an empty slot is treated as a no-op rather than
+    // a panic.
+    let child = match state.0.lock() {
+        Ok(mut guard) => guard.take(),
+        Err(e) => {
+            eprintln!("stop_scanning: mutex poisoned: {e}");
+            return;
+        }
+    };
+    if let Some(child) = child {
+        if let Err(e) = child.kill() {
+            eprintln!("stop_scanning: kill failed: {e}");
+        }
+    }
 }
 
 fn emit_scan_status(app_handle: &tauri::AppHandle, groups: Captures) {

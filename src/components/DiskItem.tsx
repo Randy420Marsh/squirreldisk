@@ -1,4 +1,3 @@
-import { Link } from "react-router-dom";
 import diskIcon from "../assets/harddisk.png";
 import removableDriver from "../assets/removable-drive.png";
 
@@ -16,6 +15,8 @@ const DiskItem = ({ disk }: any) => {
   const xy: any = x.find((e) => perc > e.from && perc <= e.to);
 
   const icona = disk.isRemovable ? removableDriver : diskIcon;
+  // Computed at render time so the value is current even if window.OS_TYPE
+  // was populated asynchronously after the module loaded.
   const mul = window.OS_TYPE === "Windows_NT" ? 1024 : 1000;
 
   return (

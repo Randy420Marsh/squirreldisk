@@ -3,14 +3,7 @@ import { useNavigate, useLocation } from "react-router-dom";
 import diskIcon from "../assets/harddisk.png";
 import { getChart } from "../d3chart";
 import * as d3 from "d3";
-import {
-  buildPath,
-  getViewNode,
-  getViewNodeGraph,
-  buildFullPath,
-  diskItemToD3Hierarchy,
-  itemMap,
-} from "../pruneData";
+import { buildFullPath, diskItemToD3Hierarchy, itemMap } from "../pruneData";
 import { FileLine } from "./FileLine";
 import { ParentFolder } from "./ParentFolder";
 import { DragDropContext, Droppable } from "react-beautiful-dnd";
@@ -110,23 +103,14 @@ const Scanning = () => {
 
       d3Chart.current = getChart(base, svgRef.current!, {
         centerHover: (_, p) => {
-          // console.log({centerHover: p})
           setHoveredItem({ ...p.data });
         },
         arcHover: (_, p) => {
-          // console.log({arcHover: p})
           setHoveredItem({ ...p.data });
         },
         arcClicked: (_, p) => {
           setFocusedDirectory(p);
           return p;
-          const curNodePath = buildPath(p);
-          const vn = getViewNode(baseData.current!, curNodePath);
-
-          setFocusedDirectory(
-            getViewNodeGraph(baseDataD3Hierarchy.current!, curNodePath)
-          );
-          return vn;
         },
       });
     }
@@ -264,48 +248,43 @@ const Scanning = () => {
                                 total: deleteList.length,
                                 current: 0,
                               });
-                              // Avvio spinner
-                              let successful: Array<D3HierarchyDiskItem> = [];
-                              // Cancello (errori li scarto da eliminare quindi vengono tenuti)
-                              for (let node of deleteList) {
+                              // Only entries whose underlying FS operation
+                              // succeeded are reported back to the chart.
+                              const successful: Array<D3HierarchyDiskItem> =
+                                [];
+                              for (const node of deleteList) {
                                 const nodePath = buildFullPath(node)
-                                  .replace("\\/", "/")
-                                  .replace("\\", "/");
+                                  .replace(/\\\//g, "/")
+                                  .replace(/\\/g, "/");
                                 try {
-                                  //   await window.electron.diskUtils.rimraf(
-                                  //     nodePath
-                                  //   );
-                                  //   if (
-                                  //     node.children &&
-                                  //     node.children.length > 0
-                                  //   ) {
-                                  // Workaroound: Since sometimes if the tree has some trimmed leafs a folder has no children
-                                  removeDir(nodePath, {
-                                    recursive: true,
-                                  }).catch((err) =>
-                                    removeFile(nodePath).catch((err2) =>
-                                      console.error(err, err2)
-                                    )
-                                  );
-                                  //   } else {
-                                  //     removeFile(nodePath).catch((err) => console.error(err));
-                                  //   }
+                                  // Workaround: if the tree has trimmed
+                                  // leaves a folder can have no children
+                                  // even though it exists on disk, so fall
+                                  // back to removeFile if removeDir fails.
+                                  try {
+                                    await removeDir(nodePath, {
+                                      recursive: true,
+                                    });
+                                  } catch (dirErr) {
+                                    await removeFile(nodePath);
+                                  }
                                   successful.push(node);
                                   setDeleteState((prev) => ({
                                     ...prev,
                                     current: prev.current + 1,
                                   }));
                                 } catch (e) {
-                                  console.error(e);
+                                  console.error("delete failed", nodePath, e);
                                 }
                               }
-                              // Una volta finito aggiorno il grafico
+                              // Refresh the chart with the entries we
+                              // actually managed to delete.
                               d3Chart.current.deleteNodes(successful);
-                              setDeleteState((prev) => ({
+                              setDeleteState({
                                 isDeleting: false,
                                 total: 0,
                                 current: 0,
-                              }));
+                              });
                               setDeleteList([]);
                               deleteMap.current.clear();
                             }}

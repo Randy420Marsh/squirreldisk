@@ -1,8 +1,5 @@
 import * as d3 from "d3";
-// const pLimit = require('p-limit')
-import { v4 as uuidv4 } from "uuid";
 
-let genId = 0;
 export const itemMap = (obj: any, parent: any = null) => {
   if (obj.name === "(total)") {
     obj.id = "/";
@@ -124,7 +121,6 @@ export function getViewNode(base: DiskItem, path: Array<string> = []) {
     // const pruned = pruneIrrelevant(cutted)
     // debugger
     const graph = diskItemToD3Hierarchy(base);
-    debugger;
     return graph;
   } else {
     const cutted = depthCut(base, 14, 0); // 14 since it's hard to handle deepnavigation in the chart we should fix this
@@ -203,17 +199,9 @@ export function buildPath(
   }
 }
 
-export function buildFullPath(
-  node: D3HierarchyDiskItem,
-  acc: Array<string> = []
-): string {
-  const path = node.data.id.replace("\\/", "/").replace("\\", "/");
-  //   console.log({ path });
-  return path;
-  //   if (node.parent) {
-  //     return buildFullPath(node.parent, [node.data.name, ...acc]);
-  //   } else {
-  //     var x = [node.data.name, ...acc];
-  //     return x.join("/");
-  //   }
+export function buildFullPath(node: D3HierarchyDiskItem): string {
+  // The id can be a Windows-style path with mixed separators (e.g. `C:\Users/foo`).
+  // Normalize globally so every backslash is converted to a forward slash,
+  // including the escaped-slash sequence Tauri sometimes returns.
+  return node.data.id.replace(/\\\//g, "/").replace(/\\/g, "/");
 }

@@ -103,9 +103,6 @@ const animateToTarget = (
 
       return (t) => {
         const interpol = i(t);
-        if (!interpol) {
-          debugger;
-        }
         return (d.current = interpol);
       };
     })
@@ -118,9 +115,6 @@ const animateToTarget = (
       arcVisible(d.target) ? (d.children ? 0.6 : 0.4) : 0
     )
     .attrTween("d", (d) => () => {
-      if (!d.current) {
-        debugger;
-      }
       return arc(d.current)!;
     })
     .end()
