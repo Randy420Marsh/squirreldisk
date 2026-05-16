@@ -27,6 +27,7 @@
 /// - **Windows**: On Windows 11, the window will also have rounded corners.
 /// - **macOS**: Shadows are always disabled for transparent windows.
 /// - **Linux**: Unsupported, Shadows are controlled by the compositor installed on the end-user system.
+#[allow(dead_code)]
 pub fn set_window_styles(window: impl raw_window_handle::HasRawWindowHandle) -> Result<(), Error> {
     match window.raw_window_handle() {
         #[cfg(target_os = "macos")]
@@ -73,6 +74,7 @@ pub fn set_window_styles(window: impl raw_window_handle::HasRawWindowHandle) -> 
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub enum Error {
     UnsupportedPlatform,
 }

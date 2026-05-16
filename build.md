@@ -3,7 +3,7 @@
 This document explains how to build SquirrelDisk as a Debian package (`.deb`)
 from source on Ubuntu/Debian. It covers prerequisites, building, installing,
 running, and troubleshooting. The instructions were verified on
-**Ubuntu 22.04 LTS (Jammy)** with **Rust 1.83**, **Node 22**, and
+**Ubuntu 22.04 LTS (Jammy)** with **Rust 1.95**, **Node 22**, and
 **Tauri 1.2**.
 
 > SquirrelDisk is a Tauri 1.x application. Tauri's Debian bundler is invoked

@@ -60,6 +60,10 @@ Please note that the current version is not 100% stable yet, and you may encount
 2. Install the app from the .dmg
 3. First time you open the App: `Right click > Open` once (it won't run, since the binaries are not signed an alert will appear), then do it again `Right click > Open` to bypass the issue, it won't happen again after the first time.
 
+## Building from Source
+
+See [build.md](build.md) for detailed instructions on building the `.deb` package on Linux.
+
 ## Disclaimer
 
 This app was a project from 2 years ago built in Electron in 2 days, I decided to port it to Tauri to achieve better performances and to make it Open Source. Yay.
