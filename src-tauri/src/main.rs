@@ -5,7 +5,6 @@
 mod scan;
 mod window_style;
 
-use regex::Regex;
 use serde::Serialize;
 use std::process::Command;
 use std::sync::Mutex;
@@ -15,6 +14,9 @@ use tauri::Manager;
 
 #[cfg(target_os = "macos")]
 use window_vibrancy::NSVisualEffectMaterial;
+
+#[cfg(target_os = "windows")]
+use regex::Regex;
 
 #[cfg(target_os = "linux")]
 use {std::fs::metadata, std::path::PathBuf};
@@ -33,8 +35,13 @@ fn main() {
     tauri::Builder::default()
         .manage(MyState(Default::default()))
         .setup(|app| {
-            let window = app.get_window("main").unwrap();
-            // window.open_devtools();
+            // `window` is referenced from Windows/macOS-only cfg blocks
+            // below, so it is `unused` on Linux builds.
+            #[allow(unused_variables)]
+            let window = app
+                .get_window("main")
+                .ok_or("missing main window in tauri.conf.json")?;
+
             #[cfg(target_os = "macos")]
             window_vibrancy::apply_vibrancy(&window, NSVisualEffectMaterial::HudWindow, None, None)
                 .expect("Error applying blurred bg");
@@ -44,12 +51,10 @@ fn main() {
                 .expect("Error applying blurred bg");
 
             #[cfg(any(windows, target_os = "macos"))]
-            window_style::set_window_styles(&window).unwrap();
+            if let Err(e) = window_style::set_window_styles(&window) {
+                eprintln!("set_window_styles failed: {e:?}");
+            }
 
-            // app.listen_global("scan_stop", |event| {
-            //     let s = app.state::<MyState>();
-            //     s.0.lock().unwrap().take().unwrap().kill();
-            // });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -66,46 +71,56 @@ fn main() {
 fn show_in_folder(path: String) {
     #[cfg(target_os = "windows")]
     {
-        let re = Regex::new(r"/").unwrap();
+        let re = match Regex::new(r"/") {
+            Ok(re) => re,
+            Err(e) => {
+                eprintln!("show_in_folder regex compile failed: {e}");
+                return;
+            }
+        };
         let result = re.replace_all(&path, "\\");
-        Command::new("explorer")
-            .args(["/select,", format!("{}", result).as_str()]) // The comma after select is not a typo
+        // The trailing comma after `select` is required, do not remove.
+        if let Err(e) = Command::new("explorer")
+            .args(["/select,", result.as_ref()])
             .spawn()
-            .unwrap();
+        {
+            eprintln!("show_in_folder explorer spawn failed: {e}");
+        }
     }
 
     #[cfg(target_os = "linux")]
     {
-        // if path.contains(",") {
         // see https://gitlab.freedesktop.org/dbus/dbus/-/issues/76
-        let new_path = match metadata(&path).unwrap().is_dir() {
-            true => path,
-            false => {
-                let mut path2 = PathBuf::from(path);
+        let new_path = match metadata(&path) {
+            Ok(md) if md.is_dir() => path,
+            Ok(_) => {
+                let mut path2 = PathBuf::from(&path);
                 path2.pop();
-                path2.into_os_string().into_string().unwrap()
+                match path2.into_os_string().into_string() {
+                    Ok(s) => s,
+                    Err(_) => {
+                        eprintln!("show_in_folder: path is not valid UTF-8: {path}");
+                        return;
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("show_in_folder metadata failed for {path}: {e}");
+                return;
             }
         };
-        Command::new("xdg-open").arg(&new_path).spawn().unwrap();
-        // } else {
-        //     Command::new("dbus-send")
-        //         .args([
-        //             "--session",
-        //             "--dest=org.freedesktop.FileManager1",
-        //             "--type=method_call",
-        //             "/org/freedesktop/FileManager1",
-        //             "org.freedesktop.FileManager1.ShowItems",
-        //             format!("array:string:\"file://{path}\"").as_str(),
-        //             "string:\"\"",
-        //         ])
-        //         .spawn()
-        //         .unwrap();
-        // }
+        if let Err(e) = Command::new("xdg-open").arg(&new_path).spawn() {
+            eprintln!(
+                "show_in_folder xdg-open failed (is xdg-utils installed?): {e}"
+            );
+        }
     }
 
     #[cfg(target_os = "macos")]
     {
-        Command::new("open").args(["-R", &path]).spawn().unwrap();
+        if let Err(e) = Command::new("open").args(["-R", &path]).spawn() {
+            eprintln!("show_in_folder open -R failed: {e}");
+        }
     }
 }
 // Learn more about Tauri commands at https://tauri.app/v1/guides/features/command
@@ -118,14 +133,14 @@ fn get_disks() -> String {
 
     for disk in sys.disks() {
         vec.push(SquirrelDisk {
-            name: disk.name().to_str().unwrap(),
+            name: disk.name().to_str().unwrap_or("<non-utf8>"),
             s_mount_point: disk.mount_point().display().to_string(),
             total_space: disk.total_space(),
             available_space: disk.available_space(),
             is_removable: disk.is_removable(),
         });
     }
-    serde_json::to_string(&vec).unwrap().into()
+    serde_json::to_string(&vec).unwrap_or_else(|_| "[]".to_string())
 }
 
 pub struct MyState(Mutex<Option<CommandChild>>);

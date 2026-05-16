@@ -13,6 +13,65 @@ Each finding lists:
 - **Why it matters** — the user-visible impact
 - **Fix** — a concrete suggested change
 
+> **Status update — fixes shipped in this PR**
+>
+> The findings below are kept verbatim for historical reference, but the
+> following items have since been addressed in this branch:
+>
+> - **§1.1** `window.OS_TYPE` race — `main.tsx` now awaits `type()` before
+>   the first render, and the `const mul = ...` reads were moved inside the
+>   component bodies so they pick up the resolved value.
+> - **§1.2** un-awaited deletes — `DiskDetail.tsx` now `await`s
+>   `removeDir`/`removeFile` inside a real `try/catch` and only pushes to
+>   `successful` when the FS operation actually completes.
+> - **§1.3** unreachable code in `arcClicked` — the dead branch after the
+>   `return p;` was deleted.
+> - **§1.5** `setDeleteState` callback ignoring `prev` — replaced with a
+>   plain object literal.
+> - **§1.6** version mismatch — `package.json` is now `0.3.4` to match
+>   `tauri.conf.json` and `Cargo.toml`.
+> - **§1.7** path-separator regex — every `.replace("\\/", "/")` /
+>   `.replace("\\", "/")` was changed to a global regex.
+> - **§2.1** missing `xdg-utils` in `bundle.deb.depends` — added.
+> - **§2.2** updater enabled but never bundled — `updater.active` is now
+>   `false` (the endpoint pinged `https://www.squirreldisk.com/api/updates/...`
+>   at every launch, which is also the auto-update data-leak removed below).
+> - **§2.3** `bundle.identifier` switched from `com.squirreldisk.dev` to
+>   `com.squirreldisk.app`.
+> - **§2.4** maintainer/description/license/copyright metadata populated
+>   in `Cargo.toml` and `tauri.conf.json`.
+> - **§3.1**–**§3.6** Rust panics — `metadata().unwrap()`,
+>   `Command::spawn().unwrap()`, `app.get_window("main").unwrap()`,
+>   `disk.name().to_str().unwrap()`, `serde_json::to_string(...).unwrap()`
+>   and the double-`unwrap()` in `stop()` are all replaced with structured
+>   error handling that logs and continues instead of crashing.
+> - **§3.4** `unimplemented!()` on unknown `CommandEvent` — replaced with
+>   a logged no-op since `CommandEvent` is `#[non_exhaustive]`.
+> - **§4.1** Electron-era global declarations — removed from
+>   `DiskList.tsx`.
+> - **§4.2** Headway widget — `<script src="https://cdn.headwayapp.co/...">`,
+>   the `Headway.init(...)` call, the `.HW_badge_cont` CSS, the
+>   `window.Headway` type and the `.inject_here` placeholder are all gone.
+>   The app no longer makes any third-party network request at startup.
+> - **§4.3** unused `genId` removed.
+> - **§4.4** every `debugger;` statement removed from `d3chart.ts` and
+>   `pruneData.ts`.
+> - **§4.6** unused Rust imports/items — `regex::Regex` is now gated to
+>   `target_os = "windows"`, and the new unused `window` warning on Linux
+>   is suppressed with `#[allow(unused_variables)]`.
+> - **§5.4** `getIconForFolder` fallback added (`|| "default_folder.svg"`).
+> - **npm audit** — `vite`/`@vitejs/plugin-react` were upgraded to
+>   `vite@^6` / `plugin-react@^4` instead of the `vite@8` that
+>   `npm audit fix --force` proposed (vite 8 broke the build by making
+>   `esbuild` an explicit peer dependency). `npm audit` now reports
+>   **0 vulnerabilities**.
+>
+> Items left as future work: §1.4 (`pruneIrrelevant` is still a no-op),
+> §2.5 (the allowlist still uses `"all": true`; tightening it requires
+> matching the Tauri 1.x schema field-by-field — left for a follow-up),
+> §2.6 / §2.7 (missing aarch64 sidecar and 512px icon — packaging only),
+> §4.5 (large commented-out blocks), §5.1–§5.3, §6.x and §7.
+
 No source files were modified as part of this analysis.
 
 ---
