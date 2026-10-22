@@ -1,25 +1,40 @@
 name: ci
 
+# Clippy, the tests (including the landscape and portrait layout tests, which
+# run headless) and the headless build, on every platform a package is made for.
 on:
   push:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
+  BUILD_PACKAGES: build-essential pkg-config libasound2-dev libxkbcommon-dev libwayland-dev libx11-dev
 
 jobs:
   test:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-14, windows-latest, ubuntu-22.04]
+        os: [ubuntu-24.04, ubuntu-26.04, ubuntu-24.04-arm, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
       - if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libxkbcommon-dev libwayland-dev libx11-dev
+        run: sudo apt-get update && sudo apt-get install -y $BUILD_PACKAGES
+      - run: cargo clippy --release --all-targets -- -D warnings
+      - run: cargo clippy --release --no-default-features -- -D warnings
       - run: cargo test --release
       - run: cargo build --release --no-default-features
       # Windows: the `squirreldisk` command goes through squirreldisk.com, a
@@ -42,3 +57,13 @@ jobs:
           if ($v -notmatch 'squirreldisk \d') { throw "squirreldisk.com --version printed '$v'" }
           dotnet tool install --global wix --version 5.0.2
           wix build packaging/windows/squirreldisk.wxs -arch x64 -d Version=0.0.1 -d ExePath=dist\squirreldisk.exe -d ComPath=dist\squirreldisk.com -o test.msi
+
+  arch:
+    runs-on: ubuntu-24.04
+    container: archlinux:latest
+    steps:
+      - run: pacman -Syu --noconfirm --needed base-devel git rust alsa-lib libxkbcommon libglvnd
+      - uses: actions/checkout@v7
+      - run: cargo clippy --release --all-targets -- -D warnings
+      - run: cargo test --release
+      - run: cargo build --release --no-default-features

@@ -32,6 +32,8 @@
 | Windows 10 / 11 | [Installer (.msi)](https://github.com/Randy420Marsh/squirreldisk/releases/latest/download/SquirrelDisk-Windows.msi) · [Portable (.exe)](https://github.com/Randy420Marsh/squirreldisk/releases/latest/download/squirreldisk-x86_64-pc-windows-msvc.exe) |
 | Linux (x86_64), any distribution | [AppImage](https://github.com/Randy420Marsh/squirreldisk/releases/latest/download/SquirrelDisk-x86_64.AppImage) · [Archive (.tar.gz)](https://github.com/Randy420Marsh/squirreldisk/releases/latest/download/SquirrelDisk-Linux-x86_64.tar.gz) |
 | Ubuntu 24.04 / 26.04 | [24.04 (.deb)](https://github.com/Randy420Marsh/squirreldisk/releases/latest/download/SquirrelDisk-Ubuntu-24.04-amd64.deb) · [26.04 (.deb)](https://github.com/Randy420Marsh/squirreldisk/releases/latest/download/SquirrelDisk-Ubuntu-26.04-amd64.deb) |
+| Linux (arm64), any distribution | [AppImage](https://github.com/Randy420Marsh/squirreldisk/releases/latest/download/SquirrelDisk-aarch64.AppImage) · [Archive (.tar.gz)](https://github.com/Randy420Marsh/squirreldisk/releases/latest/download/SquirrelDisk-Linux-aarch64.tar.gz) |
+| Raspberry Pi OS / Debian 13 (arm64) | [Package (.deb)](https://github.com/Randy420Marsh/squirreldisk/releases/latest/download/SquirrelDisk-Debian-trixie-arm64.deb) |
 | Arch Linux | [Package (.pkg.tar.zst)](https://github.com/Randy420Marsh/squirreldisk/releases/latest/download/SquirrelDisk-Arch-x86_64.pkg.tar.zst) |
 
 Every build is on the [releases page](https://github.com/Randy420Marsh/squirreldisk/releases), made by [GitHub Actions](.github/workflows/release.yml) from the tagged source, with a `SHA256SUMS` file to check the downloads against. The builds are not signed, so macOS and Windows warn the first time (see below). SquirrelDisk never updates itself: download a new release when you want one. The AppImage also works with AppImageUpdate and Gear Lever, which fetch new releases from this fork when you ask them to.
@@ -60,8 +62,9 @@ Click **More info**, then **Run anyway**. For the portable `.exe` you can also r
 <details>
 <summary>Installing on Linux</summary>
 
-- **AppImage:** `chmod +x SquirrelDisk-x86_64.AppImage`, then run it. It works on any distribution from 2022 on (glibc 2.35 or newer).
+- **AppImage:** `chmod +x SquirrelDisk-x86_64.AppImage` (or `-aarch64` on 64-bit ARM), then run it. It works on any distribution from 2022 on (glibc 2.35 or newer).
 - **Ubuntu:** `sudo apt install ./SquirrelDisk-Ubuntu-24.04-amd64.deb` (or the 26.04 file). It adds SquirrelDisk to the app menu and the `squirreldisk` command.
+- **Raspberry Pi** (64-bit Raspberry Pi OS) **and Debian 13 on arm64:** `sudo apt install ./SquirrelDisk-Debian-trixie-arm64.deb`. The window fits small screens such as the HyperPixel 4.0 (800x480), in landscape or portrait.
 - **Arch:** `sudo pacman -U SquirrelDisk-Arch-x86_64.pkg.tar.zst`. To build the package yourself from a clone, run `makepkg -si` in [packaging/arch](packaging/arch).
 - **Archive:** unpack it anywhere and run `SquirrelDisk/squirreldisk`.
 </details>

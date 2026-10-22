@@ -100,9 +100,13 @@ under the mouse, less the menu bar, Dock or taskbar. X11 uses XRandR plus
 
 ## Packaging and CI
 
+- `.github/workflows/ci.yml`: clippy, the tests (including the layout
+  tests) and the headless build on Ubuntu 24.04/26.04 x86_64, Ubuntu arm64,
+  macOS, Windows and Arch, on every push and pull request.
 - `.github/workflows/release.yml`: macOS universal DMG, Windows MSI, Linux
-  AppImage (built in an ubuntu:22.04 container for an old glibc), `.deb` for
-  Ubuntu 24.04/26.04, and an Arch package.
+  AppImage and archive for x86_64 and aarch64 (built in an ubuntu:22.04
+  container for an old glibc), `.deb` for Ubuntu 24.04/26.04 and for Debian
+  trixie arm64 (Raspberry Pi), and an Arch package.
 - `scripts/package-deb.sh`, `packaging/arch/PKGBUILD` and
   `scripts/bundle-macos.sh` can also be run locally.
 
@@ -127,9 +131,8 @@ Done, release 2.6.2:
   window, or overlaps other text. They are part of `cargo test`.
 - Narrow and short layouts for the duplicate finder and the delete dialog.
 
+- CI on every platform, and arm64 Linux and Raspberry Pi packages.
+
 Planned:
-- CI workflow matrix: Ubuntu 24.04/26.04 x86_64 and arm64, macOS,
-  Windows, Arch.
-- arm64 Linux and Raspberry Pi (Debian trixie) packages.
 - An Android build (arm64, API 36). This is exploratory: the file pickers,
   trash, SSH, rclone and desktop integration would have to be left out.

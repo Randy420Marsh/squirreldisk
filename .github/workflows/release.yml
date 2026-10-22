@@ -27,9 +27,9 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  # system packages for building on Ubuntu (ALSA is linked; the rest is
+  # system packages for building on Ubuntu and Debian (ALSA is linked; the rest is
   # loaded at run time and only needed by the tests that start a window)
-  UBUNTU_PACKAGES: build-essential pkg-config libasound2-dev libxkbcommon-dev libwayland-dev libx11-dev
+  BUILD_PACKAGES: build-essential pkg-config libasound2-dev libxkbcommon-dev libwayland-dev libx11-dev
 
 jobs:
   version:
@@ -123,7 +123,15 @@ jobs:
   # later, and run on most distributions released since 2022
   linux:
     needs: version
-    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     container: ubuntu:22.04
     env:
       DEBIAN_FRONTEND: noninteractive
@@ -132,7 +140,7 @@ jobs:
         run: |
           apt-get update
           apt-get install -y --no-install-recommends ca-certificates curl git file zsync \
-            libxkbcommon-x11-0 libxcb-xkb1 $UBUNTU_PACKAGES
+            libxkbcommon-x11-0 libxcb-xkb1 $BUILD_PACKAGES
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
@@ -143,20 +151,20 @@ jobs:
           mkdir -p pkg/SquirrelDisk
           cp target/release/squirreldisk packaging/linux/squirreldisk.desktop NOTICE.md LICENSE pkg/SquirrelDisk/
           cp assets/icon/icon-256.png pkg/SquirrelDisk/squirreldisk.png
-          tar -C pkg -czf SquirrelDisk-Linux-x86_64.tar.gz SquirrelDisk
+          tar -C pkg -czf SquirrelDisk-Linux-${{ matrix.arch }}.tar.gz SquirrelDisk
       - name: Build the AppImage
         env:
           # no FUSE in the container: AppImages unpack themselves instead
           APPIMAGE_EXTRACT_AND_RUN: "1"
         run: |
-          curl -fsSL -o appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          curl -fsSL -o appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-${{ matrix.arch }}.AppImage
           chmod +x appimagetool
           mkdir -p AppDir/usr/bin AppDir/usr/lib AppDir/usr/share/applications AppDir/usr/share/icons/hicolor/256x256/apps
           cp target/release/squirreldisk AppDir/usr/bin/
           # winit loads xkbcommon with dlopen, so it is not a linked
           # dependency; bundle it for systems without it (minimal X11 setups)
           for lib in libxkbcommon.so.0 libxkbcommon-x11.so.0 libxcb-xkb.so.1; do
-            cp -L "/usr/lib/x86_64-linux-gnu/$lib" AppDir/usr/lib/
+            cp -L "/usr/lib/${{ matrix.arch }}-linux-gnu/$lib" AppDir/usr/lib/
           done
           ln -s libxkbcommon.so.0 AppDir/usr/lib/libxkbcommon.so
           ln -s libxkbcommon-x11.so.0 AppDir/usr/lib/libxkbcommon-x11.so
@@ -168,18 +176,18 @@ jobs:
           cp assets/icon/icon-256.png AppDir/.DirIcon
           install -Dm644 -t AppDir/usr/share/doc/squirreldisk NOTICE.md LICENSE
           # AppImageUpdate and Gear Lever update it from this fork's releases
-          ARCH=x86_64 ./appimagetool \
-            -u "gh-releases-zsync|Randy420Marsh|squirreldisk|latest|SquirrelDisk-x86_64.AppImage.zsync" \
-            AppDir SquirrelDisk-x86_64.AppImage
-          ./SquirrelDisk-x86_64.AppImage --version
-          ls -la SquirrelDisk-x86_64.AppImage*
+          ARCH=${{ matrix.arch }} ./appimagetool \
+            -u "gh-releases-zsync|Randy420Marsh|squirreldisk|latest|SquirrelDisk-${{ matrix.arch }}.AppImage.zsync" \
+            AppDir SquirrelDisk-${{ matrix.arch }}.AppImage
+          ./SquirrelDisk-${{ matrix.arch }}.AppImage --version
+          ls -la SquirrelDisk-${{ matrix.arch }}.AppImage*
       - uses: actions/upload-artifact@v7
         with:
-          name: release-linux
+          name: release-linux-${{ matrix.arch }}
           path: |
-            SquirrelDisk-x86_64.AppImage
-            SquirrelDisk-x86_64.AppImage.zsync
-            SquirrelDisk-Linux-x86_64.tar.gz
+            SquirrelDisk-${{ matrix.arch }}.AppImage
+            SquirrelDisk-${{ matrix.arch }}.AppImage.zsync
+            SquirrelDisk-Linux-${{ matrix.arch }}.tar.gz
           if-no-files-found: error
 
   ubuntu:
@@ -191,7 +199,7 @@ jobs:
     runs-on: ubuntu-${{ matrix.release }}
     steps:
       - uses: actions/checkout@v7
-      - run: sudo apt-get update && sudo apt-get install -y dpkg-dev $UBUNTU_PACKAGES
+      - run: sudo apt-get update && sudo apt-get install -y dpkg-dev $BUILD_PACKAGES
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --release
@@ -208,6 +216,38 @@ jobs:
         with:
           name: release-ubuntu-${{ matrix.release }}
           path: SquirrelDisk-Ubuntu-${{ matrix.release }}-amd64.deb
+          if-no-files-found: error
+
+  # for the Raspberry Pi (Raspberry Pi OS is Debian trixie) and other
+  # 64-bit ARM Debian systems
+  debian:
+    needs: version
+    runs-on: ubuntu-24.04-arm
+    container: debian:trixie
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: System packages
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates curl git dpkg-dev $BUILD_PACKAGES
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --release
+      - run: cargo build --release
+      - name: Build the .deb
+        run: scripts/package-deb.sh target/release/squirreldisk SquirrelDisk-Debian-trixie-arm64.deb
+      - name: Install it and run it
+        run: |
+          dpkg-deb --info SquirrelDisk-Debian-trixie-arm64.deb
+          apt-get install -y ./SquirrelDisk-Debian-trixie-arm64.deb
+          /usr/bin/squirreldisk --version
+          apt-get remove -y squirreldisk
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-debian-trixie-arm64
+          path: SquirrelDisk-Debian-trixie-arm64.deb
           if-no-files-found: error
 
   arch:
@@ -238,7 +278,7 @@ jobs:
 
   publish:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [version, macos, windows, linux, ubuntu, arch]
+    needs: [version, macos, windows, linux, ubuntu, debian, arch]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
