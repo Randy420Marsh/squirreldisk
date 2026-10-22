@@ -1,307 +1,133 @@
-# Building SquirrelDisk as a `.deb` Package
+# Building SquirrelDisk from source
 
-This document explains how to build SquirrelDisk as a Debian package (`.deb`)
-from source on Ubuntu/Debian. It covers prerequisites, building, installing,
-running, and troubleshooting. The instructions were verified on
-**Ubuntu 22.04 LTS (Jammy)** with **Rust 1.95**, **Node 22**, and
-**Tauri 1.2**.
+SquirrelDisk 2 is a native Rust app (eframe/egui, OpenGL via glow). There is
+no web front end, no Node toolchain and no WebKitGTK. One `cargo build`
+produces a single executable.
 
-> SquirrelDisk is a Tauri 1.x application. Tauri's Debian bundler is invoked
-> by `tauri build` and produces a `.deb` automatically. There is no separate
-> `debian/` directory or `dpkg-buildpackage` workflow.
+This fork builds with **no network code at all**. It has no HTTP client, no
+update checks, no sponsor banner, no rclone downloader, and nothing is fetched
+on remote hosts. See [Network policy](#5-network-policy).
+
+> The old Tauri 1.x + React version (0.3.x) lives on the `tauri-legacy`
+> branch, with its own `build.md` for making `.deb` packages.
 
 ---
 
 ## 1. Prerequisites
 
-### 1.1 Supported distributions
+### 1.1 Rust
 
-Tauri 1.x links against **WebKitGTK 4.0** (`libwebkit2gtk-4.0-37`). Pick a
-distro that still ships this package:
-
-| Distribution        | Status                                                      |
-| ------------------- | ----------------------------------------------------------- |
-| Ubuntu 20.04 LTS    | Supported (matches the CI image used by upstream)           |
-| Ubuntu 22.04 LTS    | Supported (verified)                                        |
-| Debian 11 (Bullseye)| Supported                                                   |
-| Debian 12 (Bookworm)| Supported (`libwebkit2gtk-4.0-37` available via `bookworm`) |
-| Ubuntu 24.04+       | **Not supported out of the box** — ships only WebKitGTK 4.1 |
-
-On Ubuntu 24.04 you must either install `libwebkit2gtk-4.0-37` from a backport
-or upgrade the project to Tauri 2.x (which uses WebKitGTK 4.1). See
-[Troubleshooting](#7-troubleshooting).
-
-### 1.2 System packages
+Install a current stable toolchain with [rustup](https://rustup.rs):
 
 ```bash
-sudo apt-get update
-sudo apt-get install -y \
-    build-essential \
-    curl \
-    wget \
-    file \
-    libssl-dev \
-    libgtk-3-dev \
-    libwebkit2gtk-4.0-dev \
-    libayatana-appindicator3-dev \
-    librsvg2-dev \
-    pkg-config
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+rustup update stable
 ```
 
-`libayatana-appindicator3-dev` is only required if you want system-tray
-support; SquirrelDisk does not currently use the tray but Tauri's default
-allowlist pulls it in, so install it to avoid build warnings.
+### 1.2 Linux system packages
 
-### 1.3 Rust toolchain
-
-Install Rust via `rustup` and pin to a stable release (`>= 1.69` is required
-by Tauri 1.2; the project was verified with `1.83`):
+On Debian/Ubuntu, install the ALSA (sound effects), X11 and Wayland
+development packages:
 
 ```bash
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-source "$HOME/.cargo/env"
-rustup default stable
-rustc --version
+sudo apt-get install -y build-essential pkg-config \
+    libasound2-dev libxkbcommon-dev libwayland-dev libx11-dev
 ```
 
-### 1.4 Node.js & npm
+At run time the app needs an OpenGL driver. If GL is missing it falls back to
+CPU rendering, and Settings shows `CPU renderer (...)`. The folder picker uses
+the XDG desktop portal (`xdg-desktop-portal` plus a GTK/KDE backend).
 
-Tauri's `beforeBuildCommand` is `npm run build`, which runs `tsc && vite
-build`. Use Node 18 LTS or newer (verified with Node 22):
-
-```bash
-# Option A: via NodeSource
-curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
-sudo apt-get install -y nodejs
-
-# Option B: via nvm
-curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
-nvm install --lts
-```
-
-### 1.5 Tauri CLI
-
-The Tauri CLI is already declared as a dev-dependency in `package.json`, so
-once `npm install` has run it is invoked via `npx tauri ...`. There is no
-need to install `tauri-cli` globally.
+macOS and Windows need nothing beyond Rust (Xcode command-line tools on macOS,
+MSVC build tools on Windows).
 
 ---
 
-## 2. Get the source
+## 2. Building
 
 ```bash
-git clone https://github.com/Randy420Marsh/squirreldisk.git
-cd squirreldisk
+cargo build --release          # desktop app → target/release/squirreldisk
+cargo run --release            # build and launch
+cargo run --release -- ~/Downloads        # open on a folder
+cargo run --release -- scan ~/Projects    # terminal report, no window
+```
+
+### Headless remote agent
+
+`--no-default-features` drops the `gui` feature and builds the small agent
+that remote (SSH) scans use:
+
+```bash
+cargo build --release --no-default-features
+```
+
+It writes to the **same path** (`target/release/squirreldisk`), so rebuild the
+GUI afterwards or keep the agent somewhere else, for example with
+`--target-dir target/agent`.
+
+---
+
+## 3. Testing
+
+```bash
+cargo test --release
+```
+
+Expected result: all tests pass, with 1 ignored. The i18n test checks that
+every translation in `assets/i18n/*.json` parses and keeps its placeholders.
+
+---
+
+## 4. Packaging
+
+`packaging/` holds the Linux AppImage files (`AppRun`, `.desktop`), the
+macOS DMG and Quick Action, and the Windows WiX installer.
+`.github/workflows/release.yml` shows the exact steps for each platform. For a
+simple local install on Linux:
+
+```bash
+install -Dm755 target/release/squirreldisk ~/.local/bin/squirreldisk
+install -Dm644 packaging/linux/squirreldisk.desktop ~/.local/share/applications/squirreldisk.desktop
+install -Dm644 assets/icon/icon-256.png ~/.local/share/icons/hicolor/256x256/apps/squirreldisk.png
 ```
 
 ---
 
-## 3. Install JavaScript dependencies
+## 5. Network policy
+
+The fork removes everything that would make the app contact the internet on
+its own:
+
+| Upstream feature                           | In this fork                                        |
+| ------------------------------------------ | --------------------------------------------------- |
+| Sponsor banner (`squirreldisk.com/ads.json`, `/impressions`, click redirect) | Removed (`src/sponsor/`, `src/ui/ads.rs`) |
+| Update check (GitHub API) and self-update  | Removed: `Updater::check`/`install` do nothing      |
+| One-click rclone download (`downloads.rclone.org`) | Removed: install rclone with your package manager |
+| Remote host `curl`s the agent from GitHub  | Removed: the agent is only uploaded over SSH        |
+| `ureq`, `self-replace`, `ring`, `miniz_oxide` crates | Removed from `Cargo.toml`                  |
+
+Features **you** start still use the network, because that is what they do:
+
+- SSH scans of your own servers (through your `ssh`).
+- Cloud scans through your own `rclone`.
+- The "Other ways to install" button, which opens rclone.org in your browser.
+
+To check this yourself:
 
 ```bash
-npm install
-```
-
-This installs the React + Vite + Tauri JS toolchain. Expect ~240 packages and
-a one-time warning about npm audit findings; none of them block the build.
-
----
-
-## 4. Build the frontend
-
-Tauri will invoke this for you, but it is useful to run it once on its own to
-catch TypeScript errors before kicking off the longer Rust compile:
-
-```bash
-npm run build
-```
-
-Output is emitted to `dist/`.
-
----
-
-## 5. Build the `.deb`
-
-From the repository root:
-
-```bash
-npx tauri build --bundles deb
-```
-
-What this does, in order:
-
-1. Runs the `beforeBuildCommand` (`npm run build`) to produce `dist/`.
-2. Compiles the Rust crate in `src-tauri/` in release mode
-   (`cargo build --release`). First-time compilation downloads ~400 crates
-   and takes **2–5 minutes** on a typical 4-core machine; subsequent
-   builds are cached by `target/`.
-3. Bundles the binary, the `dist/` web assets, the `pdu` sidecar and the
-   icons into a Debian package.
-
-The resulting artefact is written to:
-
-```
-src-tauri/target/release/bundle/deb/squirrel-disk_<version>_amd64.deb
-```
-
-where `<version>` is the value of `package.version` in
-`src-tauri/tauri.conf.json` (currently `0.3.4`).
-
-Inspect the produced package:
-
-```bash
-dpkg-deb -I src-tauri/target/release/bundle/deb/squirrel-disk_0.3.4_amd64.deb
-```
-
-You should see something like:
-
-```
- Package: squirrel-disk
- Version: 0.3.4
- Architecture: amd64
- Depends: libwebkit2gtk-4.0-37, libgtk-3-0
-```
-
-> The `Depends:` line is auto-populated by Tauri because
-> `tauri.conf.json` declares an empty `bundle.deb.depends` array.
-> If you ever need to declare additional runtime dependencies
-> (for example `xdg-utils` for "Show in folder" to work) add them to
-> that list and rebuild — see also [BUGS.md](./BUGS.md).
-
----
-
-## 6. Install and run
-
-### 6.1 Install with apt (recommended)
-
-`apt` resolves missing dependencies automatically:
-
-```bash
-sudo apt install ./src-tauri/target/release/bundle/deb/squirrel-disk_0.3.4_amd64.deb
-```
-
-### 6.2 Install with dpkg
-
-```bash
-sudo dpkg -i src-tauri/target/release/bundle/deb/squirrel-disk_0.3.4_amd64.deb
-# resolve any missing deps reported by dpkg
-sudo apt-get install -f
-```
-
-### 6.3 Launch
-
-From a terminal:
-
-```bash
-squirrel-disk
-```
-
-Or from the desktop menu — the bundler installs a `.desktop` entry at
-`/usr/share/applications/squirrel-disk.desktop` and an icon at
-`/usr/share/icons/hicolor/`.
-
-### 6.4 Uninstall
-
-```bash
-sudo apt remove squirrel-disk      # or: sudo dpkg -r squirrel-disk
+cargo tree -e normal | grep -iE 'ureq|reqwest|hyper|rustls|native-tls|openssl'   # no output
+strace -f -qq -e trace=socket,connect,sendto,sendmsg,sendmmsg \
+    -o /tmp/sqd.strace timeout 25 target/release/squirreldisk
+grep -oE 'socket\(AF_[A-Z0-9]+' /tmp/sqd.strace | sort | uniq -c        # only AF_UNIX
 ```
 
 ---
 
-## 7. Troubleshooting
+## 6. Troubleshooting
 
-### `error: failed to run custom build command for openssl-sys`
-
-Install `libssl-dev` and `pkg-config` (covered in
-[section 1.2](#12-system-packages)).
-
-### `failed to load shared libraries: libwebkit2gtk-4.0.so.37`
-
-The runtime library is missing. On Ubuntu 22.04 / Debian 12:
-
-```bash
-sudo apt-get install -y libwebkit2gtk-4.0-37
-```
-
-On Ubuntu 24.04 the 4.0 series is no longer published. Workarounds:
-
-- Use a 22.04/Debian 12 chroot or container to **build**; the resulting
-  `.deb` still installs fine on 24.04 once the 4.0 runtime is added from
-  a backport PPA.
-- Or migrate the project to Tauri 2.x (out of scope for this document).
-
-### `xdg-open: command not found` when clicking "Show in folder"
-
-`xdg-open` is invoked via `std::process::Command` from the Rust side
-(`src-tauri/src/main.rs`) and is not declared as a runtime dependency.
-Install it explicitly:
-
-```bash
-sudo apt-get install -y xdg-utils
-```
-
-A permanent fix is tracked in [BUGS.md](./BUGS.md).
-
-### `The updater is enabled but the bundle target list does not contain 'updater'`
-
-This warning is emitted by Tauri because `tauri.conf.json` enables the
-auto-updater but `bundles` does not contain `"updater"`. The `.deb` is
-still produced and works; it just will not generate the signed
-`*.tar.gz.sig` update artefacts. Add `"updater"` (alongside `"deb"`) if
-you also want to ship updates. See [BUGS.md](./BUGS.md).
-
-### `cannot find sidecar binary 'bin/pdu-aarch64-unknown-linux-gnu'`
-
-The repository only ships an x86_64 build of the `pdu` sidecar
-(`src-tauri/bin/pdu-x86_64-unknown-linux-gnu`). Building for ARM Linux
-requires you to drop an `aarch64` build of [parallel-disk-usage] into
-`src-tauri/bin/` first. Otherwise pass `--target x86_64-unknown-linux-gnu`
-explicitly:
-
-```bash
-npx tauri build --target x86_64-unknown-linux-gnu --bundles deb
-```
-
-[parallel-disk-usage]: https://github.com/KSXGitHub/parallel-disk-usage
-
----
-
-## 8. Other bundle formats
-
-Tauri's Linux bundler also supports AppImage. To build both at once:
-
-```bash
-npx tauri build --bundles deb,appimage
-```
-
-AppImage requires `libfuse2`:
-
-```bash
-sudo apt-get install -y libfuse2
-```
-
----
-
-## 9. Reproducing the upstream CI build
-
-`.github/workflows/main.yml` builds the `.deb` on `ubuntu-20.04` via
-[`tauri-apps/tauri-action@v0`]. To reproduce its environment locally:
-
-```bash
-docker run --rm -it \
-    -v "$PWD":/workspace -w /workspace \
-    ubuntu:20.04 bash
-# inside the container:
-apt-get update && apt-get install -y \
-    build-essential curl wget file libssl-dev pkg-config \
-    libgtk-3-dev libwebkit2gtk-4.0-dev \
-    libayatana-appindicator3-dev librsvg2-dev
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-source "$HOME/.cargo/env"
-curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
-apt-get install -y nodejs
-npm install
-npx tauri build --bundles deb
-```
-
-[`tauri-apps/tauri-action@v0`]: https://github.com/tauri-apps/tauri-action
+- **`alsa-sys` build error.** Install `libasound2-dev`.
+- **`wayland-sys`/`xkbcommon` errors.** Install `libwayland-dev libxkbcommon-dev`.
+- **Blank or black window on old GPUs.** Turn off "Shader effects" in Settings.
+  If GL fails completely, the CPU renderer is used.
+- **The folder picker doesn't open.** Install `xdg-desktop-portal-gtk` (or
+  `-kde`). Dropping a folder onto the window works too.

@@ -1,5 +1,12 @@
 # SquirrelDisk — Code Analysis Findings
 
+> **Applies to the `tauri-legacy` branch only.** These findings are about the
+> old Tauri 1.x + React code (0.3.x). Upstream has since rewritten SquirrelDisk
+> as a native Rust/egui app (2.x, now on `main`), and none of the files below
+> exist there any more. On `main`, the fork's no-network policy is described in
+> [`build.md` § Network policy](./build.md#5-network-policy). The fixes listed
+> here are in `tauri-legacy`.
+
 This document is the result of a static review of the SquirrelDisk codebase at
 commit [`a440815`](../../commit/a440815). It catalogues the bugs, latent
 crashes, configuration issues and code-quality problems I found while
