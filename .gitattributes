@@ -1,0 +1,9 @@
+# Text stays UTF-8 with LF line ends on every OS, Windows checkouts included.
+# `i18n::tests::translations_are_clean_utf8` checks the translations.
+*.rs   text eol=lf
+*.json text eol=lf
+*.md   text eol=lf
+*.toml text eol=lf
+*.yml  text eol=lf
+*.sh   text eol=lf
+PKGBUILD text eol=lf

@@ -1,128 +1,160 @@
 name: release
 
+# A `v*` tag builds every package and publishes them as a GitHub release,
+# but only if every build passes. Run by hand (Actions → release → Run
+# workflow), or on a push to main that changes the packaging, it builds the
+# same packages as a dry run: they are kept as workflow artifacts and nothing
+# is published.
 on:
   push:
     tags: ["v*"]
+    branches: [main]
+    paths:
+      - .github/workflows/release.yml
+      - .github/release-notes.md
+      - packaging/**
+      - scripts/**
+      - Cargo.toml
+      - Cargo.lock
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 env:
   CARGO_TERM_COLOR: always
+  # system packages for building on Ubuntu (ALSA is linked; the rest is
+  # loaded at run time and only needed by the tests that start a window)
+  UBUNTU_PACKAGES: build-essential pkg-config libasound2-dev libxkbcommon-dev libwayland-dev libx11-dev
 
 jobs:
-  macos:
-    runs-on: macos-14
+  version:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.v.outputs.version }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
+      - id: v
+        name: Version from Cargo.toml, checked against the tag
+        run: |
+          version="$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [[ "$GITHUB_REF" == refs/tags/* && "$GITHUB_REF_NAME" != "v$version" ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME doesn't match version $version in Cargo.toml"
+            exit 1
+          fi
+          # the MSI needs a plain x.y.z
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::Version $version isn't x.y.z"; exit 1; }
+
+  macos:
+    needs: version
+    runs-on: macos-latest
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
+    steps:
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
       - run: cargo test --release
-      - name: Build app (both architectures)
+      - name: Build for Apple silicon and Intel
         run: |
           cargo build --release --target aarch64-apple-darwin
           cargo build --release --target x86_64-apple-darwin
           lipo -create -output squirreldisk-universal \
             target/aarch64-apple-darwin/release/squirreldisk \
             target/x86_64-apple-darwin/release/squirreldisk
-      - name: Bundle and package
+          lipo -info squirreldisk-universal
+      - name: Bundle and make the disk image
         run: |
           scripts/bundle-macos.sh squirreldisk-universal dist
           codesign --force --deep -s - dist/SquirrelDisk.app
+          dist/SquirrelDisk.app/Contents/MacOS/SquirrelDisk --version
           python3 -m venv .venv && .venv/bin/pip install --quiet dmgbuild
           .venv/bin/dmgbuild -s packaging/macos/dmg-settings.py -D app=dist/SquirrelDisk.app SquirrelDisk SquirrelDisk-macOS.dmg
-          # raw binaries used by the in-app updater
-          cp target/aarch64-apple-darwin/release/squirreldisk squirreldisk-aarch64-apple-darwin
-          cp target/x86_64-apple-darwin/release/squirreldisk squirreldisk-x86_64-apple-darwin
-      - name: Build agents
-        run: |
-          cargo build --release --no-default-features --target aarch64-apple-darwin
-          cp target/aarch64-apple-darwin/release/squirreldisk squirreldisk-agent-aarch64-apple-darwin
-          cargo build --release --no-default-features --target x86_64-apple-darwin
-          cp target/x86_64-apple-darwin/release/squirreldisk squirreldisk-agent-x86_64-apple-darwin
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
-          name: macos
+          name: release-macos
           path: SquirrelDisk-macOS.dmg
-      - uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/')
-        with:
-          body_path: .github/release-notes.md
-          files: |
-            SquirrelDisk-macOS.dmg
-            squirreldisk-aarch64-apple-darwin
-            squirreldisk-x86_64-apple-darwin
-            squirreldisk-agent-aarch64-apple-darwin
-            squirreldisk-agent-x86_64-apple-darwin
+          if-no-files-found: error
 
   windows:
+    needs: version
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
       - run: cargo test --release
       - run: cargo build --release
       - run: copy target\release\squirreldisk.exe squirreldisk-x86_64-pc-windows-msvc.exe
       # the headless build, a console program: the `squirreldisk` command (see console_shim)
       - run: cargo build --release --no-default-features --target-dir target-cli
       - run: copy target-cli\release\squirreldisk.exe squirreldisk.com
-      - name: Build MSI installer
+      - name: Build the MSI installer
         shell: pwsh
         run: |
           dotnet tool install --global wix --version 5.0.2
-          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
-          wix build packaging/windows/squirreldisk.wxs -arch x64 -d Version=$version -d ExePath=target\release\squirreldisk.exe -d ComPath=squirreldisk.com -o SquirrelDisk-Windows.msi
-      - name: Check the embedded icon
+          wix build packaging/windows/squirreldisk.wxs -arch x64 -d Version=${{ needs.version.outputs.version }} -d ExePath=target\release\squirreldisk.exe -d ComPath=squirreldisk.com -o SquirrelDisk-Windows.msi
+      - name: Save the embedded icon, to look at
         shell: pwsh
         run: |
           Add-Type -AssemblyName System.Drawing
           $icon = [System.Drawing.Icon]::ExtractAssociatedIcon("$PWD\squirreldisk-x86_64-pc-windows-msvc.exe")
           $icon.ToBitmap().Save("$PWD\exe-icon.png")
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
-          name: windows
+          name: release-windows
           path: |
             SquirrelDisk-Windows.msi
-            exe-icon.png
-      - uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/')
-        with:
-          body_path: .github/release-notes.md
-          files: |
-            SquirrelDisk-Windows.msi
             squirreldisk-x86_64-pc-windows-msvc.exe
-
-  linux:
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v7
         with:
-          targets: x86_64-unknown-linux-musl,aarch64-unknown-linux-musl
-      - run: sudo apt-get update && sudo apt-get install -y libasound2-dev libxkbcommon-dev libwayland-dev libx11-dev
+          name: check-windows-icon
+          path: exe-icon.png
+
+  # AppImage and archive: built on Ubuntu 22.04 so they need glibc 2.35 or
+  # later, and run on most distributions released since 2022
+  linux:
+    needs: version
+    runs-on: ubuntu-24.04
+    container: ubuntu:22.04
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: System packages
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates curl git file zsync \
+            libxkbcommon-x11-0 libxcb-xkb1 $UBUNTU_PACKAGES
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
       - run: cargo test --release
-      - name: Build and package app
+      - name: Build and pack the archive
         run: |
           cargo build --release
-          cp target/release/squirreldisk squirreldisk-x86_64-unknown-linux-gnu
           mkdir -p pkg/SquirrelDisk
-          cp target/release/squirreldisk pkg/SquirrelDisk/
-          cp packaging/linux/squirreldisk.desktop pkg/SquirrelDisk/
+          cp target/release/squirreldisk packaging/linux/squirreldisk.desktop NOTICE.md LICENSE pkg/SquirrelDisk/
           cp assets/icon/icon-256.png pkg/SquirrelDisk/squirreldisk.png
           tar -C pkg -czf SquirrelDisk-Linux-x86_64.tar.gz SquirrelDisk
-      - name: Build AppImage
+      - name: Build the AppImage
+        env:
+          # no FUSE in the container: AppImages unpack themselves instead
+          APPIMAGE_EXTRACT_AND_RUN: "1"
         run: |
-          sudo apt-get install -y zsync
-          wget -q https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage -O appimagetool
+          curl -fsSL -o appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
           chmod +x appimagetool
-          mkdir -p AppDir/usr/bin AppDir/usr/share/applications AppDir/usr/share/icons/hicolor/256x256/apps
+          mkdir -p AppDir/usr/bin AppDir/usr/lib AppDir/usr/share/applications AppDir/usr/share/icons/hicolor/256x256/apps
           cp target/release/squirreldisk AppDir/usr/bin/
-          # winit loads xkbcommon with dlopen, so it is not a linked dependency;
-          # bundle it for systems without it (e.g. minimal X11 setups)
-          sudo apt-get install -y libxkbcommon-x11-0 libxcb-xkb1
-          mkdir -p AppDir/usr/lib
+          # winit loads xkbcommon with dlopen, so it is not a linked
+          # dependency; bundle it for systems without it (minimal X11 setups)
           for lib in libxkbcommon.so.0 libxkbcommon-x11.so.0 libxcb-xkb.so.1; do
             cp -L "/usr/lib/x86_64-linux-gnu/$lib" AppDir/usr/lib/
           done
@@ -134,35 +166,98 @@ jobs:
           cp assets/icon/icon-256.png AppDir/squirreldisk.png
           cp assets/icon/icon-256.png AppDir/usr/share/icons/hicolor/256x256/apps/squirreldisk.png
           cp assets/icon/icon-256.png AppDir/.DirIcon
-          # update info lets AppImageUpdate / Gear Lever update it in place
-          ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 ./appimagetool \
-            -u "gh-releases-zsync|adileo|squirreldisk|latest|SquirrelDisk-x86_64.AppImage.zsync" \
+          install -Dm644 -t AppDir/usr/share/doc/squirreldisk NOTICE.md LICENSE
+          # AppImageUpdate and Gear Lever update it from this fork's releases
+          ARCH=x86_64 ./appimagetool \
+            -u "gh-releases-zsync|Randy420Marsh|squirreldisk|latest|SquirrelDisk-x86_64.AppImage.zsync" \
             AppDir SquirrelDisk-x86_64.AppImage
-          # smoke test: the bundled binary starts
-          APPIMAGE_EXTRACT_AND_RUN=1 ./SquirrelDisk-x86_64.AppImage --version
+          ./SquirrelDisk-x86_64.AppImage --version
           ls -la SquirrelDisk-x86_64.AppImage*
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
-          name: linux
+          name: release-linux
           path: |
             SquirrelDisk-x86_64.AppImage
             SquirrelDisk-x86_64.AppImage.zsync
-      - name: Build agents (static, musl)
-        run: |
-          pip install ziglang
-          cargo install cargo-zigbuild --locked
-          for t in x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do
-            cargo zigbuild --release --no-default-features --target $t
-            cp target/$t/release/squirreldisk squirreldisk-agent-$t
-          done
-      - uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/')
-        with:
-          body_path: .github/release-notes.md
-          files: |
-            SquirrelDisk-x86_64.AppImage
-            SquirrelDisk-x86_64.AppImage.zsync
             SquirrelDisk-Linux-x86_64.tar.gz
-            squirreldisk-x86_64-unknown-linux-gnu
-            squirreldisk-agent-x86_64-unknown-linux-musl
-            squirreldisk-agent-aarch64-unknown-linux-musl
+          if-no-files-found: error
+
+  ubuntu:
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        release: ["24.04", "26.04"]
+    runs-on: ubuntu-${{ matrix.release }}
+    steps:
+      - uses: actions/checkout@v7
+      - run: sudo apt-get update && sudo apt-get install -y dpkg-dev $UBUNTU_PACKAGES
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --release
+      - run: cargo build --release
+      - name: Build the .deb
+        run: scripts/package-deb.sh target/release/squirreldisk SquirrelDisk-Ubuntu-${{ matrix.release }}-amd64.deb
+      - name: Install it and run it
+        run: |
+          dpkg-deb --info SquirrelDisk-Ubuntu-${{ matrix.release }}-amd64.deb
+          sudo apt-get install -y ./SquirrelDisk-Ubuntu-${{ matrix.release }}-amd64.deb
+          /usr/bin/squirreldisk --version
+          sudo apt-get remove -y squirreldisk
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-ubuntu-${{ matrix.release }}
+          path: SquirrelDisk-Ubuntu-${{ matrix.release }}-amd64.deb
+          if-no-files-found: error
+
+  arch:
+    needs: version
+    runs-on: ubuntu-24.04
+    container: archlinux:latest
+    steps:
+      - name: System packages
+        run: pacman -Syu --noconfirm --needed base-devel git rust alsa-lib libxkbcommon libglvnd hicolor-icon-theme
+      - uses: actions/checkout@v7
+      # makepkg doesn't run as root; it also runs the tests (check())
+      - name: Build the package
+        run: |
+          useradd --create-home builder
+          chown -R builder: .
+          runuser -u builder -- bash -c 'cd packaging/arch && makepkg --noconfirm'
+          cp packaging/arch/squirreldisk-*.pkg.tar.zst SquirrelDisk-Arch-x86_64.pkg.tar.zst
+      - name: Install it and run it
+        run: |
+          pacman -Qip SquirrelDisk-Arch-x86_64.pkg.tar.zst
+          pacman -U --noconfirm SquirrelDisk-Arch-x86_64.pkg.tar.zst
+          /usr/bin/squirreldisk --version
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-arch
+          path: SquirrelDisk-Arch-x86_64.pkg.tar.zst
+          if-no-files-found: error
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [version, macos, windows, linux, ubuntu, arch]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+      - uses: softprops/action-gh-release@v3
+        with:
+          name: SquirrelDisk ${{ needs.version.outputs.version }}
+          body_path: .github/release-notes.md
+          files: dist/*
+          fail_on_unmatched_files: true
+          make_latest: "true"

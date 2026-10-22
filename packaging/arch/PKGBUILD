@@ -1,0 +1,55 @@
+# Builds SquirrelDisk from this source tree, the one around this file:
+#   cd packaging/arch && makepkg -si
+# The version comes from Cargo.toml.
+pkgname=squirreldisk
+pkgver=2.6.2
+pkgrel=1
+pkgdesc='Disk usage analyzer with an animated sunburst (no-network fork)'
+arch=('x86_64' 'aarch64')
+url='https://github.com/Randy420Marsh/squirreldisk'
+license=('AGPL-3.0-only')
+# linked: alsa-lib, glibc, gcc-libs; loaded at run time: OpenGL (libglvnd)
+# and xkbcommon, plus the libraries for X11 or Wayland
+depends=('alsa-lib' 'gcc-libs' 'glibc' 'hicolor-icon-theme' 'libglvnd' 'libxkbcommon')
+makedepends=('cargo')
+optdepends=('libxkbcommon-x11: X11 sessions'
+            'libxcursor: X11 sessions'
+            'libxi: X11 sessions'
+            'wayland: Wayland sessions'
+            'openssh: scan servers over SSH'
+            'rclone: scan cloud storage'
+            'xdg-utils: open files and folders')
+# no C flags for LTO: cargo does its own, and a cc-built object would clash
+options=('!debug' '!lto')
+
+_tree() { realpath "$startdir/../.."; }
+
+pkgver() {
+  grep -m1 '^version' "$(_tree)/Cargo.toml" | cut -d'"' -f2
+}
+
+prepare() {
+  cd "$(_tree)"
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/^host: //p')"
+}
+
+build() {
+  cd "$(_tree)"
+  CARGO_TARGET_DIR="$srcdir/target" cargo build --release --frozen
+}
+
+check() {
+  cd "$(_tree)"
+  CARGO_TARGET_DIR="$srcdir/target" cargo test --release --frozen
+}
+
+package() {
+  cd "$(_tree)"
+  install -Dm755 "$srcdir/target/release/squirreldisk" "$pkgdir/usr/bin/squirreldisk"
+  install -Dm644 packaging/linux/squirreldisk.desktop "$pkgdir/usr/share/applications/squirreldisk.desktop"
+  for s in 16 32 48 64 128 256 512; do
+    install -Dm644 "assets/icon/icon-$s.png" "$pkgdir/usr/share/icons/hicolor/${s}x${s}/apps/squirreldisk.png"
+  done
+  install -Dm644 NOTICE.md "$pkgdir/usr/share/doc/squirreldisk/NOTICE.md"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/squirreldisk/LICENSE"
+}
