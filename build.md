@@ -105,6 +105,7 @@ its own:
 | One-click rclone download (`downloads.rclone.org`) | Removed: install rclone with your package manager |
 | Remote host `curl`s the agent from GitHub  | Removed: the agent is only uploaded over SSH        |
 | `ureq`, `self-replace`, `ring`, `miniz_oxide` crates | Removed from `Cargo.toml`                  |
+| Sponsor, stats, update and rclone-download texts in `assets/i18n` | Removed, so none of it is in the binary |
 
 Features **you** start still use the network, because that is what they do:
 
@@ -119,6 +120,7 @@ cargo tree -e normal | grep -iE 'ureq|reqwest|hyper|rustls|native-tls|openssl'  
 strace -f -qq -e trace=socket,connect,sendto,sendmsg,sendmmsg \
     -o /tmp/sqd.strace timeout 25 target/release/squirreldisk
 grep -oE 'socket\(AF_[A-Z0-9]+' /tmp/sqd.strace | sort | uniq -c        # only AF_UNIX
+strings target/release/squirreldisk | grep -ciE 'sponsor|squirreldisk\.com|api\.github|downloads\.rclone'   # 0
 ```
 
 ---
