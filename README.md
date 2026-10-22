@@ -62,7 +62,10 @@ Click **More info**, then **Run anyway**. For the portable `.exe` you can also r
 <details>
 <summary>Installing on Linux</summary>
 
-- **AppImage:** `chmod +x SquirrelDisk-x86_64.AppImage` (or `-aarch64` on 64-bit ARM), then run it. It works on any distribution from 2022 on (glibc 2.35 or newer).
+- **AppImage:** `chmod +x SquirrelDisk-x86_64.AppImage` (or `-aarch64` on 64-bit ARM), then run it, or tick *Allow executing file as program* in the file's properties. It works on any distribution from 2022 on (glibc 2.35 or newer): Ubuntu 22.04 and later, Linux Mint 21+, Debian 12+, Fedora 36+, openSUSE Tumbleweed and Arch. Ubuntu 20.04, Debian 11 and RHEL 9 are too old. When it runs, SquirrelDisk adds itself to the app menu with its icon (`~/.local/share/applications/squirreldisk.desktop`), unless it is in portable mode or the `.deb` is also installed. If you delete or move the AppImage, the entry is hidden until you run it again from its new place.
+  - If it says FUSE is missing (`dlopen(): error loading libfuse.so.2`), install `libfuse2t64` (Ubuntu 24.04 and later) or `libfuse2`, or run it with `--appimage-extract-and-run`.
+  - It can't run from a folder mounted `noexec`, such as some USB sticks and `/tmp` on hardened systems: move it to your home folder first.
+  - On a Raspberry Pi, use the `.deb` below instead: it starts faster and needs no FUSE.
 - **Ubuntu:** `sudo apt install ./SquirrelDisk-Ubuntu-24.04-amd64.deb` (or the 26.04 file). It adds SquirrelDisk to the app menu and the `squirreldisk` command.
 - **Raspberry Pi** (64-bit Raspberry Pi OS) **and Debian 13 on arm64:** `sudo apt install ./SquirrelDisk-Debian-trixie-arm64.deb`. The window fits small screens such as the HyperPixel 4.0 (800x480), in landscape or portrait.
 - **Arch:** `sudo pacman -U SquirrelDisk-Arch-x86_64.pkg.tar.zst`. To build the package yourself from a clone, run `makepkg -si` in [packaging/arch](packaging/arch).
@@ -99,13 +102,15 @@ To use a specific folder instead, set the `SQUIRRELDISK_CONFIG_DIR` environment 
 
 **Fits any window.** The whole interface scales with the window: shrink it to a corner of the screen or stretch it across a 4K monitor, and text, buttons and the chart grow or shrink to fit. Ctrl + and Ctrl − (⌘ on macOS) make everything bigger or smaller on top of that, and Ctrl 0 goes back to normal. Your choice is remembered.
 
-<p align="center"><img src="screenshots/scaling.gif" alt="The interface scaling with the window and with Ctrl + and Ctrl −" width="860"></p>
+<p align="center"><img src="screenshots/scaling.png" alt="The same disk in a laptop window, on an 800x480 screen and on a phone-sized portrait screen" width="860"></p>
 
 **Collect, then clean up.** Drag slices or list rows into the collector at the bottom. When you're ready, move everything to the Trash, delete it for good, or copy it to an external drive or to the cloud first. A progress view keeps you posted, with a little celebration at the end.
 
 <p align="center"><img src="screenshots/collect.gif" alt="Dragging folders into the collector and deleting them" width="860"></p>
 
 **Find duplicates.** A tool on the home screen finds identical files across folders, disks, servers and cloud storage, compared by content, so renamed copies are found too. One copy of every set is always kept.
+
+<p align="center"><img src="screenshots/dupes.png" alt="The duplicate finder comparing a folder, an external disk and a network share" width="820"></p>
 
 **Secure erase.** When you delete for good, you can have every file overwritten three times with zeros, ones and random data (DoD 5220.22-M) before it's removed. On SSDs some old data can survive; full-disk encryption protects it completely.
 
@@ -148,6 +153,8 @@ $ squirreldisk scan ~/Projects --depth 2 --top 3
   <img src="screenshots/overview.png" alt="Disk overview" width="420">
   <img src="screenshots/delete.png" alt="Delete confirmation" width="420">
   <img src="screenshots/theme-sunset.png" alt="Sunset theme" width="420">
+  <img src="screenshots/explore.png" alt="Inside a folder" width="420">
+  <img src="screenshots/dupes.png" alt="Duplicate finder" width="420">
 </p>
 
 ## Privacy

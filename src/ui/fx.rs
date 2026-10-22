@@ -166,8 +166,17 @@ impl Toasts {
         }
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.list.is_empty()
+    /// Sliding in or fading out.
+    pub fn moving(&self) -> bool {
+        self.list.iter().any(|t| {
+            let age = t.born.elapsed().as_secs_f32();
+            age < 0.6 || age > 4.6
+        })
+    }
+
+    /// Time until a resting toast starts to fade.
+    pub fn next_change(&self) -> Option<std::time::Duration> {
+        self.list.iter().map(|t| std::time::Duration::from_secs_f32(4.6).saturating_sub(t.born.elapsed())).min()
     }
 
     pub fn draw(&mut self, ctx: &egui::Context, theme: &Theme, dt: f32) {

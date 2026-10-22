@@ -129,7 +129,135 @@ scan and the erase. Only regular files that are not hard-linked elsewhere
 are ever overwritten, so this can't reach a symlink target or a device.
 Closing it needs `openat`-style traversal from the scan root.
 
+## Linux desktop and AppImage
+
+### Programs started from the AppImage loaded its libraries
+
+**Bug.** AppRun always added the bundled `usr/lib` (xkbcommon) to
+`LD_LIBRARY_PATH`. The app passed that on to everything it started: the file
+manager, `ssh`, `rclone`, `xdg-open`. Those then loaded the AppImage's copies
+instead of the system's own, which can crash or misbehave when the versions
+differ.
+
+**Fix.** AppRun adds the bundled libraries only when the system has no
+xkbcommon of its own, and saves the original value in
+`SQUIRRELDISK_LD_LIBRARY_PATH`. The app restores it first thing in `main`,
+after the loader has read it and before anything is started.
+Files: `packaging/linux/AppRun`, `src/main.rs`.
+
+### Starting the AppImage from a terminal could fail
+
+**Bug.** Run from a terminal, the app starts a detached copy of itself and
+exits. For an AppImage it started the executable inside the AppImage's
+mount, which goes away as soon as the first process exits. The new copy
+could lose its own files and fail to start.
+
+**Fix.** It starts the `.AppImage` file again (`$APPIMAGE`), which mounts
+afresh.
+File: `src/main.rs`.
+
+### The AppImage's mount stayed after the app closed
+
+**Bug.** The detached copy inherited the open pipe the AppImage runtime
+uses to know when to unmount. One mount was left behind until that copy
+exited, and each launch from a terminal added another.
+
+**Fix.** Before the new copy starts, every inherited descriptor above
+stderr is set to close on exec (`close_range`). There is now one mount
+while the app runs and none after it closes.
+File: `src/main.rs`.
+
+### No title bar or dock icon on Wayland
+
+**Bug.** GNOME on Wayland draws no title bars for apps (no server-side
+decorations), so the window had none: it couldn't be moved or closed with
+the mouse. Without an app id the dock and task bars showed a generic icon
+and couldn't match the window to the menu entry.
+
+**Fix.** winit's own Adwaita-style title bar (`wayland-csd-adwaita`, drawn
+by winit, no extra system libraries). The app id and X11 `WM_CLASS` are
+`squirreldisk`, and the desktop entries carry `StartupWMClass=squirreldisk`.
+Files: `Cargo.toml`, `src/main.rs`, `packaging/linux/squirreldisk.desktop`.
+
+### The AppImage wasn't in the menu or the dock
+
+**Bug.** An AppImage is one downloaded file. Nothing added it to the
+applications menu, and docks had no icon for it.
+
+**Fix.** At launch the app writes `~/.local/share/applications/squirreldisk.desktop`
+and the hicolor icons, pointing at the AppImage it runs from. It follows
+the file when it moves. `TryExec` hides the entry once the file is gone. It
+is left out in portable mode, when the app is installed as a package, when
+AppImageLauncher or Gear Lever already added that AppImage, and when the
+user has an entry of their own there.
+File: `src/ui/integration.rs`.
+Test: `ui::integration::tests::appimage_menu_entry`.
+
+### The `squirreldisk` command broke when the AppImage moved
+
+**Bug.** The command is a link to the AppImage. After moving it or
+downloading a newer version, the link pointed at nothing (or at the old
+download), and Settings couldn't set it up again because the link was in
+the way.
+
+**Fix.** A link that points at nothing, or at another SquirrelDisk
+AppImage, counts as missing. At launch it is replaced by one to the copy
+being run, and Settings can replace it too (`ln -sf` on macOS).
+File: `src/ui/integration.rs`.
+Test: `ui::integration::tests::stale_command_links`.
+
+### The running AppImage could be deleted from inside the app
+
+**Bug.** The safety rules protected the running executable. Inside an
+AppImage that is a file in the read-only mount, not the `.AppImage` the user
+sees, so the app would offer to collect and delete its own AppImage.
+
+**Fix.** The file named by `$APPIMAGE` is protected as well.
+File: `src/safety.rs`.
+
 ## Interface
+
+### The icon had no transparency, and was a blob at 16 px
+
+**Bug.** The new icon painting came with a white background, not a
+transparent one, so it showed a white square in docks and on dark panels.
+At 16 to 48 px the painting shrank to a coloured blob.
+
+**Fix.** The disc was cut out by hand with a softened edge. That cut-out is
+`assets/icon/icon-1024.png`, and every size is made from it. Below 64 px the
+icon is drawn from circles instead (`icon::small`): rim, crown and acorns
+get bolder as the size shrinks. `--render-icons` also writes the same shapes
+as `icon-small.svg`.
+File: `src/icon.rs`.
+Test: `icon::tests::small_icons_are_drawn`.
+
+### The home-screen logo looked grainy
+
+**Bug.** The logo was rendered at 184 px and egui shrank it to about 46 on
+screen, at a position between pixels.
+
+**Fix.** It is rendered at its size in physical pixels and placed on whole
+pixels.
+File: `src/ui/home.rs`.
+
+### The window drew as many frames as the GPU allowed
+
+**Bug.** With the sunburst effects on (the default), a folder view asked for
+a new frame every frame, although the effects don't move. So did the
+duplicate finder's growing "space to win back" counter, the Cloud storage
+spinner and the toasts for their whole five seconds. Where vsync isn't
+honoured (nested X servers like Xephyr, some drivers) that meant hundreds of
+frames a second and a fully loaded GPU on an idle window.
+
+**Fix.** Frames come only while something moves: chart transitions, drags,
+particles, a toast sliding in or fading, rows sliding in. The hatch over
+collected items redraws at 15 fps and an idle window polls at 2 fps. A frame
+limiter keeps to at most 60 frames a second (30 while a scan reshapes the
+chart) even without vsync; egui takes one frame off every timed repaint, so
+the limiter, not the delay, sets the pace. Measured under Xephyr with
+`SQD_FPS=1`: 3 fps idle on every screen, 30 fps during a scan.
+Files: `src/ui/app.rs`, `src/ui/fx.rs`, `src/ui/dupes.rs`,
+`src/ui/cloud.rs`, `src/ui/view.rs`.
 
 ### The window opened at the top left, partly off the screen
 

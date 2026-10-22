@@ -34,7 +34,22 @@ mod update;
 #[cfg(feature = "gui")]
 mod watch;
 
+/// The AppImage's AppRun may add its bundled libraries to LD_LIBRARY_PATH.
+/// The loader has already read it by now, so put the original back for the
+/// programs the app starts: a file manager or ssh must not load our copies.
+fn restore_library_path() {
+    if let Some(orig) = std::env::var_os("SQUIRRELDISK_LD_LIBRARY_PATH") {
+        if orig.is_empty() {
+            std::env::remove_var("LD_LIBRARY_PATH");
+        } else {
+            std::env::set_var("LD_LIBRARY_PATH", orig);
+        }
+        std::env::remove_var("SQUIRRELDISK_LD_LIBRARY_PATH");
+    }
+}
+
 fn main() {
+    restore_library_path();
     // Invoked by ssh as SSH_ASKPASS helper: answer the prompt and leave.
     if let Ok(secret) = std::env::var(scan::remote::ASKPASS_ENV) {
         println!("{secret}");
@@ -124,7 +139,15 @@ fn detach_from_terminal(args: &[String]) {
     if !std::io::stdin().is_terminal() || std::env::var_os(DETACHED).is_some() {
         return;
     }
-    let Ok(me) = std::env::current_exe().and_then(std::fs::canonicalize) else { return };
+    // an AppImage runs from a mount that goes away when this process ends,
+    // so start the .AppImage file again rather than the executable inside
+    let me = match update::appimage_path() {
+        Some(appimage) => appimage,
+        None => match std::env::current_exe().and_then(std::fs::canonicalize) {
+            Ok(me) => me,
+            Err(_) => return,
+        },
+    };
     // macOS: through Launch Services, so it starts as the app it is (Dock
     // icon, focus) even when typed via the /usr/local/bin link
     #[cfg(target_os = "macos")]
@@ -136,10 +159,17 @@ fn detach_from_terminal(args: &[String]) {
     }
     let mut cmd = std::process::Command::new(me);
     cmd.args(args).env(DETACHED, "1").stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
-    // SAFETY: setsid is async-signal-safe, as required between fork and exec.
+    // SAFETY: setsid and close_range are async-signal-safe, as required
+    // between fork and exec.
     unsafe {
         cmd.pre_exec(|| {
             libc::setsid();
+            // nothing open here goes along: an AppImage's runtime keeps its
+            // mount until every copy of its pipe is closed, so it would stay
+            // for as long as the new copy runs (an old kernel without
+            // close_range just keeps them)
+            #[cfg(target_os = "linux")]
+            libc::syscall(libc::SYS_close_range, 3u32, u32::MAX, libc::CLOSE_RANGE_CLOEXEC);
             Ok(())
         });
     }
@@ -154,6 +184,9 @@ fn run_gui(folder: Option<std::path::PathBuf>) {
     let icon = app_icon();
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("SquirrelDisk")
+        // the Wayland app_id and X11 WM_CLASS: docks and task bars find the
+        // icon and name through the desktop entry of the same name
+        .with_app_id("squirreldisk")
         .with_inner_size([1180.0, 760.0])
         .with_min_inner_size([320.0, 320.0])
         .with_drag_and_drop(true)

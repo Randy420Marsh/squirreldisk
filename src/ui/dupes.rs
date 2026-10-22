@@ -840,7 +840,9 @@ impl App {
         // space to win back
         let (freed, extra) = (d.view().freed, d.view().extra);
         let p = ui.painter();
-        let shown = ui.ctx().animate_value_with_time(Id::new("dupes-freed"), freed as f32, 0.35);
+        // counts along while comparing would redraw every frame of the scan
+        let ease = if d.is_scanning() { 0.0 } else { 0.35 };
+        let shown = ui.ctx().animate_value_with_time(Id::new("dupes-freed"), freed as f32, ease);
         let of_extra = trf("of {size} in extra copies", &[("size", &fmt_size(extra))]);
         if stacked {
             let y = left.bottom() + 12.0;
@@ -1199,6 +1201,9 @@ impl App {
             let t0 = *d.appeared.entry(g.id).or_insert(if fresh { now } else { now - 1.0 });
             let appear = ((now - t0) / 0.45).clamp(0.0, 1.0) as f32;
             let slide = (1.0 - super::sunburst::ease(appear)) * 18.0;
+            if appear < 1.0 {
+                ui.ctx().request_repaint_after(super::app::FRAME);
+            }
             match l.copy {
                 None => {
                     let expanded = d.expanded.contains(&g.id);

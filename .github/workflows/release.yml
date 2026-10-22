@@ -157,29 +157,7 @@ jobs:
           # no FUSE in the container: AppImages unpack themselves instead
           APPIMAGE_EXTRACT_AND_RUN: "1"
         run: |
-          curl -fsSL -o appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-${{ matrix.arch }}.AppImage
-          chmod +x appimagetool
-          mkdir -p AppDir/usr/bin AppDir/usr/lib AppDir/usr/share/applications AppDir/usr/share/icons/hicolor/256x256/apps
-          cp target/release/squirreldisk AppDir/usr/bin/
-          # winit loads xkbcommon with dlopen, so it is not a linked
-          # dependency; bundle it for systems without it (minimal X11 setups)
-          for lib in libxkbcommon.so.0 libxkbcommon-x11.so.0 libxcb-xkb.so.1; do
-            cp -L "/usr/lib/${{ matrix.arch }}-linux-gnu/$lib" AppDir/usr/lib/
-          done
-          ln -s libxkbcommon.so.0 AppDir/usr/lib/libxkbcommon.so
-          ln -s libxkbcommon-x11.so.0 AppDir/usr/lib/libxkbcommon-x11.so
-          install -m755 packaging/linux/AppRun AppDir/AppRun
-          cp packaging/linux/squirreldisk.desktop AppDir/
-          cp packaging/linux/squirreldisk.desktop AppDir/usr/share/applications/
-          cp assets/icon/icon-256.png AppDir/squirreldisk.png
-          cp assets/icon/icon-256.png AppDir/usr/share/icons/hicolor/256x256/apps/squirreldisk.png
-          cp assets/icon/icon-256.png AppDir/.DirIcon
-          install -Dm644 -t AppDir/usr/share/doc/squirreldisk NOTICE.md LICENSE
-          # AppImageUpdate and Gear Lever update it from this fork's releases
-          ARCH=${{ matrix.arch }} ./appimagetool \
-            -u "gh-releases-zsync|Randy420Marsh|squirreldisk|latest|SquirrelDisk-${{ matrix.arch }}.AppImage.zsync" \
-            AppDir SquirrelDisk-${{ matrix.arch }}.AppImage
-          ./SquirrelDisk-${{ matrix.arch }}.AppImage --version
+          scripts/build-appimage.sh target/release/squirreldisk SquirrelDisk-${{ matrix.arch }}.AppImage
           ls -la SquirrelDisk-${{ matrix.arch }}.AppImage*
       - uses: actions/upload-artifact@v7
         with:

@@ -5,4 +5,5 @@ Comment=See what's using your disk space and clean it up
 Exec=squirreldisk
 Icon=squirreldisk
 Categories=Utility;System;FileTools;
+StartupWMClass=squirreldisk
 Terminal=false

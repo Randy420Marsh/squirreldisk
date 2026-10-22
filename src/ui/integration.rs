@@ -214,6 +214,69 @@ mod imp {
         Ok(())
     }
 
+    /// Marks the menu entry as ours, to update or remove later.
+    const MARK: &str = "X-SquirrelDisk-AppImage=true";
+
+    /// An AppImage is a single file the user downloaded: unlike a package,
+    /// nothing puts it in the applications menu or gives the dock and task
+    /// bar its icon. Writes a menu entry pointing at `appimage`, and the
+    /// icons, unless the app is installed as a package or another tool
+    /// (AppImageLauncher, Gear Lever) has already added this AppImage.
+    pub fn appimage_entry(appimage: &Path) -> std::io::Result<()> {
+        let data = data_home().ok_or(std::io::ErrorKind::NotFound)?;
+        let packaged = ["/usr/share/applications", "/usr/local/share/applications"].iter().any(|d| Path::new(d).join("squirreldisk.desktop").is_file());
+        if appimage_entry_in(&data, appimage, packaged)? {
+            let apps = data.join("applications");
+            std::thread::spawn(move || std::process::Command::new("update-desktop-database").arg(apps).status());
+        }
+        Ok(())
+    }
+
+    /// The work of [`appimage_entry`], in `data` (`~/.local/share`). True
+    /// when the entry changed.
+    pub fn appimage_entry_in(data: &Path, appimage: &Path, packaged: bool) -> std::io::Result<bool> {
+        let apps = data.join("applications");
+        let path = apps.join("squirreldisk.desktop");
+        let old = std::fs::read_to_string(&path).ok();
+        let ours = old.as_deref().is_none_or(|s| s.contains(MARK));
+        if !ours {
+            // the user's own entry
+            return Ok(false);
+        }
+        let target = appimage.to_string_lossy();
+        let elsewhere = std::fs::read_dir(&apps).into_iter().flatten().flatten().any(|e| {
+            let name = e.file_name();
+            name != "squirreldisk.desktop" && name != "squirreldisk-folder.desktop" && e.path().extension().is_some_and(|x| x == "desktop") && std::fs::read_to_string(e.path()).is_ok_and(|s| s.lines().any(|l| l.starts_with("Exec=") && l.contains(&*target)))
+        });
+        if packaged || elsewhere {
+            if old.is_some() {
+                std::fs::remove_file(&path)?;
+                return Ok(true);
+            }
+            return Ok(false);
+        }
+        let entry = format!(
+            "[Desktop Entry]\nType=Application\nName=SquirrelDisk\nComment={}\nExec={} %f\nTryExec={}\nIcon=squirreldisk\nStartupWMClass=squirreldisk\nCategories=Utility;System;FileTools;\nTerminal=false\n{MARK}\nX-SquirrelDisk-Version={}\n",
+            tr("See what's using your disk space, and clean it up safely."),
+            desktop_quote(&target),
+            // TryExec takes no quotes: hides the entry once the file is gone
+            target.replace('\\', "\\\\"),
+            env!("CARGO_PKG_VERSION"),
+        );
+        if old.as_deref() == Some(entry.as_str()) {
+            return Ok(false);
+        }
+        let icons = data.join("icons/hicolor");
+        for s in [16u32, 32, 48, 64, 128, 256, 512] {
+            let p = icons.join(format!("{s}x{s}/apps/squirreldisk.png"));
+            std::fs::create_dir_all(p.parent().unwrap())?;
+            std::fs::write(&p, crate::icon::png(s, crate::icon::Frame::IDLE, false))?;
+        }
+        std::fs::create_dir_all(&apps)?;
+        std::fs::write(&path, entry)?;
+        Ok(true)
+    }
+
     /// Quoting for `Exec=` in desktop entries: the spec's quoting rule,
     /// then its string escapes (hence a backslash written four times).
     fn desktop_quote(s: &str) -> String {
@@ -237,6 +300,16 @@ mod imp {
 #[cfg(unix)]
 fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
+}
+
+/// AppImage: the menu entry and icons (see `imp::appimage_entry`), kept
+/// pointing at this copy. Not for a portable copy, which leaves nothing
+/// behind on the system.
+pub fn appimage_entry() {
+    #[cfg(all(unix, not(target_os = "macos")))]
+    if let Some(a) = crate::update::appimage_path().filter(|_| crate::settings::portable_dir().is_none()) {
+        std::thread::spawn(move || imp::appimage_entry(&a));
+    }
 }
 
 // ----------------------------------------------------------------------------
@@ -291,6 +364,10 @@ pub fn cli_status() -> Cli {
         }
         match std::fs::read_link(&link) {
             Ok(to) if to == exe => Cli::Installed(link),
+            Ok(to) if stale_link(&to) => match check_location(&t) {
+                Ok(()) => Cli::Missing(link),
+                Err(e) => Cli::Unavailable(e),
+            },
             _ if link.symlink_metadata().is_ok() => Cli::Taken(link),
             _ => match check_location(&t) {
                 Ok(()) => Cli::Missing(link),
@@ -298,6 +375,15 @@ pub fn cli_status() -> Cli {
             },
         }
     }
+}
+
+/// A link this app may replace: one left pointing at nothing (the app was
+/// moved or deleted), or at another SquirrelDisk AppImage (an older
+/// download), which the copy being run takes over.
+#[cfg(unix)]
+fn stale_link(to: &Path) -> bool {
+    let name = to.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
+    !to.exists() || (name.contains("squirreldisk") && name.ends_with(".appimage"))
 }
 
 /// What the link points to: the executable (in the bundle on macOS, so
@@ -324,6 +410,10 @@ pub fn install_cli(quiet: bool) -> Result<(), String> {
     {
         let Cli::Missing(link) = cli_status() else { return Ok(()) };
         let exe = cli_exe(&target().ok_or("can't find the app")?);
+        // a stale link goes first (see `stale_link`)
+        if link.symlink_metadata().is_ok_and(|m| m.file_type().is_symlink()) {
+            let _ = std::fs::remove_file(&link);
+        }
         let direct = std::fs::create_dir_all(link.parent().unwrap()).and_then(|_| std::os::unix::fs::symlink(&exe, &link));
         match direct {
             Ok(()) => Ok(()),
@@ -331,7 +421,7 @@ pub fn install_cli(quiet: bool) -> Result<(), String> {
             Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied && !quiet => {
                 // the standard password prompt, with the paths as arguments
                 // so nothing needs quoting in the script
-                let script = "on run argv\ndo shell script \"mkdir -p /usr/local/bin && ln -s \" & quoted form of item 1 of argv & \" \" & quoted form of item 2 of argv with administrator privileges\nend run";
+                let script = "on run argv\ndo shell script \"mkdir -p /usr/local/bin && ln -sf \" & quoted form of item 1 of argv & \" \" & quoted form of item 2 of argv with administrator privileges\nend run";
                 let out = std::process::Command::new("osascript").arg("-e").arg(script).arg(&exe).arg(&link).output().map_err(|e| e.to_string())?;
                 if out.status.success() {
                     Ok(())
@@ -353,10 +443,16 @@ fn dev_build(t: &Path) -> bool {
     t.components().any(|c| c.as_os_str() == "target")
 }
 
-/// First launch: installs the command where no password is needed (not for
-/// development builds, see [`cli_status`]).
-pub fn install_cli_first_launch() {
-    if matches!(cli_status(), Cli::Missing(_)) {
+/// At launch: installs the command where no password is needed on the
+/// `first` launch, and after that only puts back a stale link, so that
+/// `squirreldisk` keeps working when the AppImage is moved or updated (not
+/// for development builds, see [`cli_status`]).
+pub fn install_cli_at_launch(first: bool) {
+    #[cfg(unix)]
+    let replaces = cli_link().is_some_and(|l| l.symlink_metadata().is_ok_and(|m| m.file_type().is_symlink()));
+    #[cfg(windows)]
+    let replaces = false;
+    if matches!(cli_status(), Cli::Missing(_)) && (first || replaces) {
         std::thread::spawn(|| install_cli(true));
     }
 }
@@ -369,7 +465,7 @@ pub fn cli_on_path(link: &Path) -> bool {
 
 #[cfg(all(test, unix, not(target_os = "macos")))]
 mod tests {
-    use super::imp::set_folder_menu_in;
+    use super::imp::{appimage_entry_in, set_folder_menu_in};
     use std::path::Path;
 
     #[test]
@@ -386,5 +482,42 @@ mod tests {
         assert!(!data.join("applications/squirreldisk-folder.desktop").exists());
         assert!(!data.join("nautilus/scripts/Scan with SquirrelDisk").exists());
         let _ = std::fs::remove_dir_all(data);
+    }
+
+    #[test]
+    fn appimage_menu_entry() {
+        let data = std::env::temp_dir().join(format!("sqd-appimage-{}", std::process::id()));
+        let entry = data.join("applications/squirreldisk.desktop");
+        let a = Path::new("/home/u/Apps/Squirrel Disk.AppImage");
+        assert!(appimage_entry_in(&data, a, false).unwrap());
+        let s = std::fs::read_to_string(&entry).unwrap();
+        assert!(s.contains("Exec=\"/home/u/Apps/Squirrel Disk.AppImage\" %f\n"), "{s}");
+        assert!(s.contains("TryExec=/home/u/Apps/Squirrel Disk.AppImage\n"), "{s}");
+        assert!(s.contains("StartupWMClass=squirreldisk\n"));
+        assert!(data.join("icons/hicolor/48x48/apps/squirreldisk.png").is_file());
+        // unchanged: nothing to do; moved: follows
+        assert!(!appimage_entry_in(&data, a, false).unwrap());
+        let moved = Path::new("/home/u/SquirrelDisk.AppImage");
+        assert!(appimage_entry_in(&data, moved, false).unwrap());
+        assert!(std::fs::read_to_string(&entry).unwrap().contains("TryExec=/home/u/SquirrelDisk.AppImage\n"));
+        // installed as a package: ours goes
+        assert!(appimage_entry_in(&data, moved, true).unwrap());
+        assert!(!entry.exists());
+        // added by AppImageLauncher or Gear Lever: none of ours
+        std::fs::write(data.join("applications/appimagekit_1234-SquirrelDisk.desktop"), "[Desktop Entry]\nExec=/home/u/SquirrelDisk.AppImage %f\n").unwrap();
+        assert!(!appimage_entry_in(&data, moved, false).unwrap());
+        assert!(!entry.exists());
+        // the user's own entry is left alone
+        std::fs::write(&entry, "[Desktop Entry]\nExec=mine\n").unwrap();
+        assert!(!appimage_entry_in(&data, a, false).unwrap());
+        assert_eq!(std::fs::read_to_string(&entry).unwrap(), "[Desktop Entry]\nExec=mine\n");
+        let _ = std::fs::remove_dir_all(data);
+    }
+
+    #[test]
+    fn stale_command_links() {
+        assert!(super::stale_link(Path::new("/nonexistent/squirreldisk")));
+        assert!(super::stale_link(Path::new("/home/u/Downloads/SquirrelDisk-2.6.1-x86_64.AppImage")));
+        assert!(!super::stale_link(Path::new("/bin/sh")));
     }
 }

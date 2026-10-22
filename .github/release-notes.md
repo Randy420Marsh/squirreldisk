@@ -10,6 +10,9 @@ This is [Randy420Marsh/squirreldisk](https://github.com/Randy420Marsh/squirreldi
 - Fixed: backup over SSH failed with OpenSSH 9 and later, and on names with `[` or `*`.
 - **Small screens, portrait and touch.** The window can be as small as 320x320 and turned either way up, from a phone-sized screen or a Raspberry Pi HyperPixel to a monitor on its side. Narrow windows get their own arrangement of the home page, the duplicate finder and the dialogs, and lists scroll with a finger. Automated tests check every screen at those sizes on every platform.
 - **The window opens in the middle of your screen** on Linux X11 with more than one monitor.
+- **A new icon**, with simpler versions drawn for small sizes so it still reads at 16 px.
+- **Easier on the GPU and battery.** The window draws only while something moves, at most 60 frames a second, and almost nothing while idle.
+- **The AppImage joins the menu and the dock.** On first run it adds itself to the applications menu, follows the file when you move it, and keeps the `squirreldisk` command working after a move or an update. It has a title bar on GNOME Wayland, and programs it opens no longer get its bundled libraries.
 - New packages for Ubuntu 24.04, Ubuntu 26.04, Arch Linux, 64-bit ARM Linux and the Raspberry Pi (Debian 13 trixie, arm64).
 
 Everything else is as in upstream 2.6.1, including the duplicate finder.

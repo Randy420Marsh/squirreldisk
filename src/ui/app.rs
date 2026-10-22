@@ -253,6 +253,31 @@ pub fn refresh_rclone(state: &Arc<Mutex<RcloneState>>, ctx: &egui::Context) {
     });
 }
 
+/// With SQD_FPS set, prints the frames drawn each second to stderr (for
+/// checking that an idle window stays idle).
+fn fps_log(now: Instant, ctx: &egui::Context) {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    static COUNT: Mutex<(u32, Option<Instant>)> = Mutex::new((0, None));
+    if !*ON.get_or_init(|| std::env::var_os("SQD_FPS").is_some()) {
+        return;
+    }
+    let mut c = COUNT.lock().unwrap();
+    c.0 += 1;
+    if std::env::var_os("SQD_FPS_WHY").is_some() {
+        for cause in ctx.repaint_causes() {
+            eprintln!("cause {cause}");
+        }
+    }
+    let start = *c.1.get_or_insert(now);
+    if now.duration_since(start) >= Duration::from_secs(1) {
+        eprintln!("fps {}", c.0);
+        *c = (0, Some(now));
+    }
+}
+
+/// Shortest time between frames: 60 a second.
+pub(super) const FRAME: Duration = Duration::from_micros(16_667);
+
 pub enum Modal {
     Settings,
     Ssh { host: String, path: String },
@@ -308,6 +333,8 @@ pub struct App {
     pub time: f64,
     pub dt: f32,
     pub last_frame: Instant,
+    /// Shortest time to the next frame (see FRAME).
+    pub frame_gap: Duration,
     pub rclone: Arc<Mutex<RcloneState>>,
     /// rclone download in progress (Cloud storage dialog).
     pub ssh_hosts: Vec<String>,
@@ -458,16 +485,18 @@ impl App {
             settings.chart_style = style;
         }
         // system hooks: keep the folder menu pointing at this copy of the
-        // app, and set up the `squirreldisk` command once
+        // app, the `squirreldisk` command (set up once) and an AppImage's menu entry
         if !scan::demo::enabled() {
             if settings.folder_menu {
                 let _ = super::integration::set_folder_menu(true);
             }
-            if !settings.cli_offered {
+            let first = !settings.cli_offered;
+            if first {
                 settings.cli_offered = true;
                 settings.save();
-                super::integration::install_cli_first_launch();
             }
+            super::integration::install_cli_at_launch(first);
+            super::integration::appimage_entry();
         }
         let mut app = App::bare(&cc.egui_ctx, settings, cc.gl.as_deref());
         refresh_rclone(&app.rclone, &cc.egui_ctx);
@@ -520,6 +549,7 @@ impl App {
             time: 0.0,
             dt: 0.016,
             last_frame: Instant::now(),
+            frame_gap: FRAME,
             rclone: Arc::new(Mutex::new(RcloneState::Looking)),
             ssh_hosts: Vec::new(),
             ctx_menu: None,
@@ -585,7 +615,7 @@ impl App {
                 }
                 match self.dock.done_at {
                     Some(d) if d.elapsed().as_secs_f32() < 1.2 => {
-                        ctx.request_repaint();
+                        ctx.request_repaint_after(Duration::from_millis(40));
                         due(40, &self.dock).then(|| icon::done_frame(d.elapsed().as_secs_f32()))
                     }
                     Some(_) => {
@@ -973,10 +1003,16 @@ impl App {
                 None => self.start_session(Target::Folder(folder)),
             }
         }
+        // vsync isn't always honoured (nested X servers, some drivers), and
+        // egui's own transitions ask for a repaint straight away
+        if let Some(rest) = self.frame_gap.checked_sub(self.last_frame.elapsed()) {
+            std::thread::sleep(rest);
+        }
         let now = Instant::now();
         self.dt = now.duration_since(self.last_frame).as_secs_f32().clamp(0.001, 0.1);
         self.last_frame = now;
         self.time += self.dt as f64;
+        fps_log(now, &ctx);
         self.apply_theme(&ctx);
         self.direct(&ctx);
         self.marks.clear();
@@ -1053,20 +1089,33 @@ impl App {
             }
         }
 
-        // repaint policy: animate when something moves, poll slowly while scanning
-        let scanning = self.sessions.iter().any(|s| s.is_scanning() || s.delete.is_some());
+        // repaint policy: redraw only while something moves, at most 60 times
+        // a second (see FRAME), and poll slowly otherwise
+        let scanning = self.sessions.iter().any(|s| s.is_scanning() || s.delete.is_some())
+            || self.dupes.as_ref().is_some_and(|d| d.is_scanning());
         let animating = self.drag.is_some()
             || !self.particles.is_empty()
-            || !self.toasts.is_empty()
+            || self.toasts.moving()
             || match self.screen {
                 Screen::Session(i) => self.sessions.get(i).is_some_and(|s| if self.settings.chart_style == "treemap" { !s.treemap.settled } else { !s.anim.settled }),
-                Screen::Home => false,
-                Screen::Dupes => self.dupes.as_ref().is_some_and(|d| d.is_scanning()),
+                Screen::Home | Screen::Dupes => false,
             };
-        if animating || (self.settings.shader_fx && matches!(self.screen, Screen::Session(_))) {
+        // the hatch over collected items in the sunburst drifts slowly
+        let hatch = match self.screen {
+            Screen::Session(i) => self.settings.chart_style != "treemap" && self.sessions.get(i).is_some_and(|s| !s.collector.is_empty()),
+            _ => false,
+        };
+        // a scan reshapes the chart for minutes: half the rate is plenty
+        self.frame_gap = if animating && scanning { FRAME * 2 } else { FRAME };
+        if animating {
+            // egui takes a frame off any delay, so the gap above sets the pace
             ctx.request_repaint();
         } else if scanning {
             ctx.request_repaint_after(Duration::from_millis(80));
+        } else if hatch {
+            ctx.request_repaint_after(Duration::from_millis(66));
+        } else if let Some(t) = self.toasts.next_change() {
+            ctx.request_repaint_after(t);
         } else {
             ctx.request_repaint_after(Duration::from_millis(500));
         }

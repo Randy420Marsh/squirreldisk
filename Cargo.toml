@@ -11,11 +11,14 @@ repository = "https://github.com/Randy420Marsh/squirreldisk"
 default = ["gui"]
 # Everything needed for the desktop app. Build with --no-default-features
 # to get the tiny headless agent used on remote servers.
-gui = ["dep:eframe", "dep:egui_glow", "dep:notify", "dep:sysinfo", "dep:rodio", "dep:rfd", "dep:tiny-skia", "dep:skrifa", "dep:x11-dl", "dep:raw-window-handle"]
+gui = ["dep:eframe", "dep:egui_glow", "dep:notify", "dep:sysinfo", "dep:rodio", "dep:rfd", "dep:tiny-skia", "dep:skrifa", "dep:x11-dl", "dep:raw-window-handle", "dep:winit"]
 
 [dependencies]
 eframe = { optional = true, version = "0.36", default-features = false, features = ["glow", "default_fonts", "wayland", "x11"] }
 egui_glow = { version = "0.36", optional = true }
+# Adwaita title bar on Wayland desktops without server-side decorations
+# (GNOME): winit's own, drawn with ab_glyph, so no extra system libraries
+winit = { version = "0.30", optional = true, default-features = false, features = ["wayland-csd-adwaita"] }
 notify = { optional = true, version = "8", default-features = false, features = ["macos_fsevent"] }
 trash = "5"
 sysinfo = { optional = true, version = "0.39", default-features = false, features = ["disk"] }

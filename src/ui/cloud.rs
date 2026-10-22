@@ -318,7 +318,7 @@ fn spinner(ui: &Ui, c: Pos2, r: f32, color: egui::Color32, time: f64) {
     let a0 = (time * 5.0) as f32;
     let pts: Vec<Pos2> = (0..=24).map(|k| a0 + k as f32 / 24.0 * 4.2).map(|a| c + Vec2::angled(a) * r).collect();
     ui.painter().add(egui::Shape::line(pts, Stroke::new(2.0, color)));
-    ui.ctx().request_repaint();
+    ui.ctx().request_repaint_after(std::time::Duration::from_millis(33));
 }
 
 impl App {

@@ -2,10 +2,17 @@
 # Records the README demo GIFs with fake data (MARKETING_DEMO) and frames them
 # in a macOS-style window on a gradient background.
 # Requires: ffmpeg, rsvg-convert. Usage: scripts/make-gifs.sh [scripts...]
+# FRAMES=<dir> keeps the recorded frames there (<dir>/<script>/frame-*.png),
+# for still screenshots.
 set -euo pipefail
 BIN="${BIN:-target/release/squirreldisk}"
-WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
+if [ -n "${FRAMES:-}" ]; then
+  mkdir -p "$FRAMES"
+  WORK=$FRAMES
+else
+  WORK="$(mktemp -d)"
+  trap 'rm -rf "$WORK"' EXIT
+fi
 for f in background mask overlay; do
   rsvg-convert "packaging/gif/$f.svg" -o "$WORK/$f.png"
 done

@@ -77,6 +77,7 @@ ones:
 | `SQD_SCREEN=dupes` with `SQD_DUPES_PICK=1` | duplicate finder with mock results |
 | `SQD_SHOT=prefix`, `SQD_SHOT_AT=3`, `SQD_QUIT=1` | screenshot after 3 s, then quit |
 | `SQD_ZOOM=2` | interface scale |
+| `SQD_FPS=1`, `SQD_FPS_WHY=1` | print frames per second to stderr (and what asked for each frame) |
 
 ### Screenshots at many sizes
 
@@ -91,6 +92,36 @@ Xephyr has no window manager. With `SQD_WINDOW` the app does not place
 itself, so a window at the top left of a test screen is expected there. To
 check placement, run without `SQD_WINDOW` (see BUGS.md, *The window opened
 at the top left*).
+
+### Frame rate
+
+The app draws only while something moves, and at most 60 frames a second
+(`FRAME` in `src/ui/app.rs`), 30 while a scan reshapes the chart. That also
+holds where vsync doesn't, as in Xephyr. After a change to drawing or
+animation, check it: run with `SQD_FPS=1` on a test screen and leave the
+window alone. Every screen should drop to about 3 fps within a second or
+two of the last change. `SQD_FPS_WHY=1` also prints where each repaint was
+asked for. egui takes one frame off every `request_repaint_after` delay,
+so a delay under one frame is the same as `request_repaint()`.
+
+### Screenshots and demo GIFs
+
+`scripts/make-gifs.sh [scripts...]` records the README GIFs from the demo
+scripts in `src/ui/director.rs` (`hero`, `collect`, `themes`, `treemap`)
+and frames them in `packaging/gif/`. With `FRAMES=<dir>` it keeps the
+frames, which is where the still screenshots come from. On Linux, record
+in a Xephyr screen with `SQD_WINDOW=1180x760`: the app otherwise sizes its
+window to 80% of the screen. It needs ffmpeg and `rsvg-convert`. Check
+every frame you keep for personal data.
+
+### Icons
+
+`assets/icon/icon-1024.png` is the master, a painting with a hand-cut
+transparent edge. `squirreldisk --render-icons` makes every other size
+from it, plus the `.ico` and `.icns`. Below 64 px the icon is drawn from
+circles instead (`icon::small` in `src/icon.rs`), its rim, crown and
+acorns getting bolder as the size shrinks, and that shape list is also
+written as `icon-small.svg`. Run it again after changing either.
 
 ### Window placement
 
@@ -107,10 +138,12 @@ under the mouse, less the menu bar, Dock or taskbar. X11 uses XRandR plus
   AppImage and archive for x86_64 and aarch64 (built in an ubuntu:22.04
   container for an old glibc), `.deb` for Ubuntu 24.04/26.04 and for Debian
   trixie arm64 (Raspberry Pi), and an Arch package.
-- `scripts/package-deb.sh`, `packaging/arch/PKGBUILD` and
-  `scripts/bundle-macos.sh` can also be run locally.
+- `scripts/build-appimage.sh`, `scripts/package-deb.sh`,
+  `packaging/arch/PKGBUILD` and `scripts/bundle-macos.sh` can also be run
+  locally. Build the AppImage on the oldest system it should run on (glibc
+  2.35, Ubuntu 22.04): it needs that glibc or newer.
 
-## Where things stand (2026-10-22)
+## Where things stand (2026-10-23)
 
 Done, release 2.6.2:
 - Upstream merge with the no-network policy.
@@ -132,6 +165,10 @@ Done, release 2.6.2:
 - Narrow and short layouts for the duplicate finder and the delete dialog.
 
 - CI on every platform, and arm64 Linux and Raspberry Pi packages.
+
+- The new icon, drawn small sizes and sharp home-screen logo; the AppImage
+  menu entry, Wayland title bar and the AppImage fixes in BUGS.md; frame
+  rate capped and idle windows idle; screenshots and GIFs recreated.
 
 Planned:
 - An Android build (arm64, API 36). This is exploratory: the file pickers,

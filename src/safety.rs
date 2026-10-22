@@ -148,6 +148,10 @@ impl Rules {
         if let Ok(exe) = std::env::current_exe() {
             r.forbidden_trees.push(norm(&exe.to_string_lossy(), r.os));
         }
+        // the .AppImage file itself (the executable above is inside its mount)
+        if let Some(appimage) = std::env::var_os("APPIMAGE") {
+            r.forbidden_trees.push(norm(&appimage.to_string_lossy(), r.os));
+        }
         r
     }
 

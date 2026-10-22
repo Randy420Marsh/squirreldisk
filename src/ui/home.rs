@@ -46,9 +46,16 @@ impl App {
         {
             let p = ui.painter();
             let _ = t;
-            let logo = Rect::from_min_size(Pos2::new(x0, y + 2.0), Vec2::splat(46.0));
+            let ppp = ui.ctx().pixels_per_point();
+            let at = Pos2::new((x0 * ppp).round() / ppp, ((y + 2.0) * ppp).round() / ppp);
+            let logo = Rect::from_min_size(at, Vec2::splat(46.0));
+            // drawn at its size in pixels: the painting's detail aliases
+            // when the GPU shrinks it, so it is scaled here instead
+            let px = (46.0 * ui.ctx().pixels_per_point()).round().max(1.0) as usize;
+            if self.logo.as_ref().is_some_and(|t| t.size()[0] != px) {
+                self.logo = None;
+            }
             let tex = self.logo.get_or_insert_with(|| {
-                let px = 184;
                 let pm = crate::icon::render(px as u32, crate::icon::Frame::IDLE, false);
                 let img = egui::ColorImage::from_rgba_unmultiplied([px, px], &crate::icon::rgba(&pm));
                 ui.ctx().load_texture("app-icon", img, egui::TextureOptions::LINEAR)

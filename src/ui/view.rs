@@ -245,6 +245,9 @@ impl App {
             let sig = (t.version ^ (free >> 20).rotate_left(40), s.view, rings, radius as i32, theme.name.to_string());
             let view_changed = sig.1 != s.layout_sig.1 || sig.2 != s.layout_sig.2 || sig.4 != s.layout_sig.4;
             let interval = if s.is_scanning() { 160 } else { 30 };
+            if sig != s.layout_sig && !view_changed && s.last_layout.elapsed().as_millis() <= interval {
+                ui.ctx().request_repaint_after(std::time::Duration::from_millis(interval as u64));
+            }
             if sig != s.layout_sig && (view_changed || s.last_layout.elapsed().as_millis() > interval) {
                 let segs = sunburst::layout(&t, s.view, &geo, rings, &theme, free);
                 drop(t);

@@ -1,6 +1,15 @@
 #!/bin/sh
 # AppImage entry point: run the bundled binary.
 HERE="$(dirname "$(readlink -f "$0")")"
-# Libraries loaded at runtime (xkbcommon) that minimal systems may lack.
-export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+$LD_LIBRARY_PATH:}$HERE/usr/lib"
+# xkbcommon is loaded at run time and minimal systems may lack it; the
+# bundled copy is only a fallback, since the system's own matches its
+# keyboard data. The app gives the programs it starts (file manager, ssh,
+# rclone) the original LD_LIBRARY_PATH back, see restore_library_path().
+for d in /usr/lib/"$(uname -m)"-linux-gnu /usr/lib64 /usr/lib; do
+    [ -e "$d/libxkbcommon-x11.so.0" ] && [ -e "$d/libxkbcommon.so.0" ] && found=1 && break
+done
+if [ -z "${found:-}" ]; then
+    export SQUIRRELDISK_LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}"
+    export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+$LD_LIBRARY_PATH:}$HERE/usr/lib"
+fi
 exec "$HERE/usr/bin/squirreldisk" "$@"
