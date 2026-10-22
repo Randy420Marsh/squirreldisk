@@ -90,6 +90,22 @@ pub static PROVIDERS: &[Provider] = &[
         icon: Icon::Server,
         fields: &[f("host", "Host", "ftp.example.com"), opt("user", "User", "anonymous"), secret("pass", "Password", "", true), opt("port", "Port", "21")],
     },
+    // rclone's own SMB client speaks SMB 2 and 3; for SMB 1 mount the share
+    // in the system and scan it from the home screen
+    Provider {
+        kind: "smb",
+        label: "SMB / Windows share",
+        short: "smb",
+        oauth: false,
+        icon: Icon::Server,
+        fields: &[
+            f("host", "Host", "nas.local"),
+            opt("user", "User", ""),
+            secret("pass", "Password", "", true),
+            opt("domain", "Domain", "WORKGROUP"),
+            opt("port", "Port", "445"),
+        ],
+    },
     Provider {
         kind: "webdav",
         label: "WebDAV / Nextcloud",
@@ -380,7 +396,7 @@ impl App {
                         let sid = Id::new("rc-scroll");
                         let mut scroll: f32 = ui.data(|d| d.get_temp(sid)).unwrap_or(0.0);
                         if ui.rect_contains_pointer(list) {
-                            scroll -= ui.input(|i| i.smooth_scroll_delta.y);
+                            scroll -= super::app::scroll_delta(ui);
                         }
                         scroll = scroll.clamp(0.0, (content - list_h).max(0.0));
                         ui.data_mut(|d| d.insert_temp(sid, scroll));
@@ -471,7 +487,7 @@ impl App {
             }
         });
         if other_ways {
-            super::app::os_open("https://rclone.org/install/", false);
+            super::app::open_url("https://rclone.org/install/");
         }
         if refresh {
             refresh_rclone(&self.rclone, ctx);
@@ -554,7 +570,7 @@ impl App {
         let oauth = form.provider.is_some_and(|i| PROVIDERS[i].oauth);
         let rows = fields.len().div_ceil(2) as f32;
         let height = if form.provider.is_none() && form.original.is_none() {
-            100.0 + 4.0 * 66.0 + 80.0
+            100.0 + (PROVIDERS.len() + 1).div_ceil(3) as f32 * 66.0 + 80.0
         } else {
             100.0 + 70.0 + rows * 70.0 + if oauth || form.provider.is_none() { 90.0 } else { 0.0 } + 34.0 + 80.0
         };
@@ -710,7 +726,7 @@ impl App {
             form.pick(i, &existing);
         }
         if let Some(l) = open_link {
-            super::app::os_open(&l, false);
+            super::app::open_url(&l);
         }
         if terminal {
             if let Err(e) = rclone::open_config_terminal() {

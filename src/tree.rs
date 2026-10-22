@@ -178,7 +178,7 @@ impl Tree {
     /// is left goes to [`HIDDEN_REST`].
     pub fn add_hidden(&mut self, size: u64, mut parts: Vec<(String, u64)>) -> u32 {
         let id = self.add_child(self.root, HIDDEN, Kind::Hidden, 0, 0);
-        parts.sort_by(|a, b| b.1.cmp(&a.1));
+        parts.sort_by_key(|p| std::cmp::Reverse(p.1));
         let mut left = size;
         for (name, bytes) in parts {
             if bytes > 0 && bytes <= left {
@@ -209,7 +209,7 @@ impl Tree {
     /// Children sorted by size, largest first.
     pub fn sorted_children(&self, id: u32) -> Vec<u32> {
         let mut v: Vec<u32> = self.children(id).collect();
-        v.sort_unstable_by(|a, b| self.get(*b).size.cmp(&self.get(*a).size));
+        v.sort_unstable_by_key(|&c| std::cmp::Reverse(self.get(c).size));
         v
     }
 
@@ -398,7 +398,7 @@ pub fn fmt_count(n: u64) -> String {
     let s = n.to_string();
     let mut out = String::new();
     for (i, c) in s.chars().enumerate() {
-        if i > 0 && (s.len() - i) % 3 == 0 {
+        if i > 0 && (s.len() - i).is_multiple_of(3) {
             out.push(',');
         }
         out.push(c);

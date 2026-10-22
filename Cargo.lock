@@ -2563,7 +2563,7 @@ dependencies = [
 
 [[package]]
 name = "squirreldisk"
-version = "2.6.1"
+version = "2.6.2"
 dependencies = [
  "eframe",
  "egui_glow",
@@ -2585,6 +2585,7 @@ dependencies = [
  "tiny-skia",
  "trash",
  "windows-sys 0.61.2",
+ "x11-dl",
  "xxhash-rust",
 ]
 

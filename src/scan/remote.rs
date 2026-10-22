@@ -184,9 +184,11 @@ fn upload_self(host: &str) -> Result<(), String> {
     }
 }
 
-/// Reads a child's stdout line by line, applying `f` in batches under the tree lock.
+/// Reads a child's stdout record by record (split at `delim`), applying `f`
+/// in batches under the tree lock.
 fn pump_lines(
     mut child: Child,
+    delim: u8,
     tree: &SharedTree,
     progress: &Progress,
     mut f: impl FnMut(&mut Tree, &str, &Progress),
@@ -209,7 +211,7 @@ fn pump_lines(
             f(&mut t, &l, progress);
         }
     };
-    for line in reader.split(b'\n') {
+    for line in reader.split(delim) {
         if progress.cancelled() {
             let _ = child.kill();
             return Err("cancelled".into());
@@ -230,6 +232,20 @@ fn pump_lines(
     }
     Ok(())
 }
+
+/// The part of a `du` output path below the scanned root `prefix` (which has
+/// no trailing slash), or `None` if the path isn't under it.
+fn du_rel<'a>(full: &'a str, prefix: &str) -> Option<&'a str> {
+    if prefix.is_empty() {
+        // the root folder itself
+        return full.strip_prefix('/').map(|_| full);
+    }
+    let rest = full.strip_prefix(prefix)?;
+    (rest.is_empty() || rest.starts_with('/')).then_some(rest)
+}
+
+/// Stack entry for a node that was skipped, so its children are skipped too.
+const SKIPPED: u32 = u32::MAX;
 
 /// Parses one line of the agent protocol (see `agent.rs`).
 pub struct AgentParser {
@@ -277,6 +293,13 @@ impl AgentParser {
                 }
                 self.stack.truncate(depth);
                 let parent = *self.stack.last().unwrap_or(&t.root);
+                // A name must be one path component, or the tree (and a
+                // delete) would point somewhere else. Skip it with its children.
+                let bad = name.is_empty() || name == "." || name == ".." || name.contains(['/', '\0']);
+                if parent == SKIPPED || bad {
+                    self.stack.push(SKIPPED);
+                    return;
+                }
                 let id = t.add_child(parent, &name, kind, size, files);
                 t.get_mut(id).flags = flags & !crate::tree::F_EXPANDABLE;
                 self.stack.push(id);
@@ -328,11 +351,13 @@ pub fn start_ssh(host: String, path: String) -> ScanHandle {
                         .spawn()
                         .map_err(|e| e.to_string())?;
                     let mut parser = AgentParser::new();
-                    pump_lines(child, &t, &p, |tr, l, pr| parser.line(tr, l, pr))
+                    pump_lines(child, b'\n', &t, &p, |tr, l, pr| parser.line(tr, l, pr))
                 }
                 Method::GnuFind => {
+                    // NUL ends each record: a file name can hold a newline,
+                    // and with '\n' it could fake whole entries
                     let child = ssh_command(&host)
-                        .arg(format!("find {q} -xdev \\( -type f -o -type d \\) -printf '%y\\t%b\\t%n\\t%i\\t%P\\n' 2>/dev/null"))
+                        .arg(format!("find {q} -xdev \\( -type f -o -type d \\) -printf '%y\\t%b\\t%n\\t%i\\t%P\\0' 2>/dev/null"))
                         .stdout(Stdio::piped())
                         .stderr(Stdio::piped())
                         .stdin(Stdio::null())
@@ -340,7 +365,7 @@ pub fn start_ssh(host: String, path: String) -> ScanHandle {
                         .map_err(|e| e.to_string())?;
                     let mut b = PathTreeBuilder::new(0, 256 * 1024);
                     let mut seen = std::collections::HashSet::new();
-                    pump_lines(child, &t, &p, |tr, l, pr| {
+                    pump_lines(child, 0, &t, &p, |tr, l, pr| {
                         let mut it = l.splitn(5, '\t');
                         let (Some(ty), Some(blocks), Some(nlink), Some(ino), Some(rel)) =
                             (it.next(), it.next(), it.next(), it.next(), it.next())
@@ -373,10 +398,12 @@ pub fn start_ssh(host: String, path: String) -> ScanHandle {
                         .map_err(|e| e.to_string())?;
                     let mut b = PathTreeBuilder::new(0, u64::MAX);
                     let prefix = path.trim_end_matches('/').to_string();
-                    pump_lines(child, &t, &p, |tr, l, pr| {
+                    pump_lines(child, b'\n', &t, &p, |tr, l, pr| {
                         let Some((kb, full)) = l.split_once('\t') else { return };
                         let size = kb.trim().parse::<u64>().unwrap_or(0) * 1024;
-                        let rel = full.strip_prefix(&prefix).unwrap_or(full);
+                        // du can't mark where a name ends, so a newline in one
+                        // splits it; drop pieces that aren't under the root
+                        let Some(rel) = du_rel(full, &prefix) else { return };
                         b.add_du_dir(tr, rel, size);
                         pr.dirs.fetch_add(1, Ordering::Relaxed);
                         pr.bytes.store(tr.get(0).size, Ordering::Relaxed);
@@ -426,7 +453,7 @@ pub fn start_rclone(remote_path: String) -> ScanHandle {
             Err(e) => Err(format!("cannot run rclone: {e}")),
             Ok(child) => {
                 let mut b = PathTreeBuilder::new(0, 256 * 1024);
-                pump_lines(child, &t, &p, |tr, l, pr| {
+                pump_lines(child, b'\n', &t, &p, |tr, l, pr| {
                     let l = l.trim().trim_end_matches(',');
                     if !l.starts_with('{') {
                         return;
@@ -493,5 +520,55 @@ mod tests {
         let (big, ok) = t.find_path("/usr/big");
         assert!(ok);
         assert_eq!(t.get(big).size, 200);
+    }
+
+    #[test]
+    fn agent_names_stay_inside_the_root() {
+        let mut t = Tree::new("/srv", "/srv", Source::Ssh { host: "h".into() });
+        let p = Progress::default();
+        let mut parser = AgentParser::new();
+        let lines = [
+            "N\t0\td\t900\t9\t1\t/srv",
+            "N\t1\td\t100\t1\t1\t..",
+            "N\t2\tf\t100\t1\t0\tetc", // child of a skipped dir
+            "N\t1\tf\t100\t1\t0\ta/b",
+            "N\t1\tf\t100\t1\t0\t.",
+            "N\t1\tf\t100\t1\t0\t",
+            "N\t1\td\t100\t1\t1\tok",
+            "N\t2\tf\t100\t1\t0\tfine..txt",
+        ];
+        for l in lines {
+            parser.line(&mut t, l, &p);
+        }
+        assert_eq!(t.child_count(0), 1);
+        assert!(t.find_path("/srv/ok/fine..txt").1);
+        assert!(!t.find_path("/srv/etc").1);
+    }
+
+    #[test]
+    fn du_paths_must_be_under_the_root() {
+        assert_eq!(du_rel("/srv/data", "/srv/data"), Some(""));
+        assert_eq!(du_rel("/srv/data/a/b", "/srv/data"), Some("/a/b"));
+        // a sibling that shares the prefix, or a name cut at a newline
+        assert_eq!(du_rel("/srv/database", "/srv/data"), None);
+        assert_eq!(du_rel("rest of a name", "/srv/data"), None);
+        assert_eq!(du_rel("/usr/lib", ""), Some("/usr/lib"));
+        assert_eq!(du_rel("junk", ""), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn find_records_split_at_nul() {
+        // a name with a newline that looks like a second record
+        let child = Command::new("printf")
+            .arg("f\\t8\\t1\\t1\\tevil\\nf\\t99999999\\t1\\t2\\t../x\\000f\\t8\\t1\\t3\\tok\\000")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let tree: SharedTree = Arc::new(RwLock::new(Tree::new("/", "/", Source::Ssh { host: "h".into() })));
+        let mut got = Vec::new();
+        pump_lines(child, 0, &tree, &Progress::default(), |_, l, _| got.push(l.to_string())).unwrap();
+        assert_eq!(got, ["f\t8\t1\t1\tevil\nf\t99999999\t1\t2\t../x", "f\t8\t1\t3\tok"]);
     }
 }

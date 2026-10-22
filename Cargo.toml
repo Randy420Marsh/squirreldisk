@@ -1,16 +1,17 @@
 [package]
 name = "squirreldisk"
-version = "2.6.1"
+version = "2.6.2"
 edition = "2021"
 description = "Fast, fun, cross-platform disk usage analyzer with an animated sunburst"
 license = "AGPL-3.0-only"
-repository = "https://github.com/adileo/squirreldisk"
+repository = "https://github.com/Randy420Marsh/squirreldisk"
+# Modified fork of https://github.com/adileo/squirreldisk (see NOTICE.md)
 
 [features]
 default = ["gui"]
 # Everything needed for the desktop app. Build with --no-default-features
 # to get the tiny headless agent used on remote servers.
-gui = ["dep:eframe", "dep:egui_glow", "dep:notify", "dep:sysinfo", "dep:rodio", "dep:rfd", "dep:tiny-skia", "dep:skrifa"]
+gui = ["dep:eframe", "dep:egui_glow", "dep:notify", "dep:sysinfo", "dep:rodio", "dep:rfd", "dep:tiny-skia", "dep:skrifa", "dep:x11-dl", "dep:raw-window-handle"]
 
 [dependencies]
 eframe = { optional = true, version = "0.36", default-features = false, features = ["glow", "default_fonts", "wayland", "x11"] }
@@ -33,11 +34,22 @@ sha1 = "0.11.0"
 embed-resource = "3"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem", "Win32_Foundation", "Win32_Globalization", "Win32_Graphics_Gdi", "Win32_UI_HiDpi", "Win32_UI_WindowsAndMessaging", "Win32_System_Registry", "Win32_Security"] }
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem", "Win32_NetworkManagement_WNet", "Win32_Foundation", "Win32_Globalization", "Win32_Graphics_Gdi", "Win32_UI_HiDpi", "Win32_UI_WindowsAndMessaging", "Win32_System_Registry", "Win32_Security"] }
 raw-window-handle = "0.6"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+# Linux and the BSDs: where the window opens on X11 (already used by winit)
+[target.'cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))'.dependencies]
+x11-dl = { version = "2.21", optional = true }
+raw-window-handle = { version = "0.6", optional = true }
+
+[lints.clippy]
+# style opinions, not bugs, that the code has never followed
+type_complexity = "allow"
+too_many_arguments = "allow"
+needless_range_loop = "allow"
 
 [profile.release]
 opt-level = 3

@@ -118,3 +118,39 @@ impl Settings {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A settings file from upstream 2.6.1, with its update and sponsor
+    /// options and no `ui_scale`, keeps the user's choices.
+    #[test]
+    fn upstream_settings_still_load() {
+        let old = r#"{
+            "theme": "Midnight", "language": "fi", "sound": true, "volume": 0.3,
+            "shader_fx": false, "auto_update": true, "auto_install": true, "rings": 4,
+            "chart_style": "treemap", "watch_fs": false, "ssh_history": ["me@nas"],
+            "backup_folder": "/backup", "backup_remote": null, "skipped_version": "2.6.0",
+            "personalized_sponsors": true, "sponsor_measurement": true,
+            "folder_menu": true, "cli_offered": true
+        }"#;
+        let s: Settings = serde_json::from_str(old).unwrap();
+        assert_eq!((s.theme.as_str(), s.language.as_str(), s.chart_style.as_str()), ("Midnight", "fi", "treemap"));
+        assert_eq!((s.sound, s.shader_fx, s.watch_fs, s.folder_menu, s.cli_offered), (true, false, false, true, true));
+        assert_eq!((s.volume, s.rings), (0.3, 4));
+        assert_eq!(s.ssh_history, ["me@nas"]);
+        assert_eq!(s.backup_folder.as_deref(), Some("/backup"));
+        assert_eq!(s.ui_scale, 1.0);
+        // and saving drops the removed options
+        let saved = serde_json::to_string(&s).unwrap();
+        assert!(!saved.contains("sponsor") && !saved.contains("auto_update") && !saved.contains("auto_install"), "{saved}");
+    }
+
+    #[test]
+    fn missing_or_empty_settings_are_the_defaults() {
+        let s: Settings = serde_json::from_str("{}").unwrap();
+        let d = Settings::default();
+        assert_eq!((s.theme, s.language, s.ui_scale, s.rings), (d.theme, d.language, d.ui_scale, d.rings));
+    }
+}

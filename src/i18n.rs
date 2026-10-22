@@ -81,7 +81,7 @@ macro_rules! lang {
 }
 
 /// The 25 most spoken languages (plus English as the source).
-pub const LANGS: [Lang; 25] = [
+pub const LANGS: [Lang; 26] = [
     Lang { code: "en", native: "English", script: Script::Latin, json: "{}" },
     lang!("zh", "简体中文", Cjk),
     lang!("hi", "हिन्दी", Devanagari),
@@ -107,6 +107,7 @@ pub const LANGS: [Lang; 25] = [
     lang!("uk", "Українська", Cyrillic),
     lang!("th", "ไทย", Thai),
     lang!("nl", "Nederlands", Latin),
+    lang!("fi", "Suomi", Latin),
 ];
 
 struct Current {
@@ -345,6 +346,110 @@ mod tests {
             let missing: Vec<&String> = english_keys.iter().filter(|k| !map.contains_key(*k)).collect();
             assert!(missing.len() <= english_keys.len() / 10, "{}: {} strings missing, e.g. {:?}", l.code, missing.len(), missing.iter().take(3).collect::<Vec<_>>());
         }
+    }
+
+    /// What is wrong with a translation file's bytes, if anything: not UTF-8,
+    /// a byte order mark, lost or double-encoded text, control characters,
+    /// decomposed accents, or letters from another script.
+    fn encoding_problem(bytes: &[u8], script: Script) -> Option<String> {
+        let text = match std::str::from_utf8(bytes) {
+            Ok(t) => t,
+            Err(e) => return Some(format!("not UTF-8: {e}")),
+        };
+        if text.contains('\u{FEFF}') {
+            return Some("byte order mark".into());
+        }
+        if text.contains('\u{FFFD}') {
+            return Some("U+FFFD: text was lost converting it".into());
+        }
+        if let Some(c) = text.chars().find(|&c| c.is_control() && c != '\n') {
+            return Some(format!("control character {c:?} (CRLF line ends or a stray byte)"));
+        }
+        // UTF-8 read as Latin-1 or Windows-1252: "Ã©" for "é", "â€™" for "’"
+        let chars: Vec<char> = text.chars().collect();
+        if let Some(w) = chars.windows(2).find(|w| ('\u{00C2}'..='\u{00F4}').contains(&w[0]) && ('\u{0080}'..='\u{00BF}').contains(&w[1]) && !matches!(w[1], '\u{00A0}' | '«' | '»')) {
+            return Some(format!("double-encoded near {:?}", w.iter().collect::<String>()));
+        }
+        if text.contains("â€") {
+            return Some("double-encoded punctuation".into());
+        }
+        let map: HashMap<String, String> = match serde_json::from_str(text) {
+            Ok(m) => m,
+            Err(e) => return Some(format!("not a JSON map: {e}")),
+        };
+        let latin = |c: char| c.is_ascii_alphabetic() || ('\u{00C0}'..='\u{024F}').contains(&c) || ('\u{1E00}'..='\u{1EFF}').contains(&c);
+        let own = |c: char| match script {
+            Script::Latin => latin(c),
+            Script::Cyrillic => ('\u{0400}'..='\u{04FF}').contains(&c),
+            s => Script::of(c) == Some(s),
+        };
+        let (mut lettered, mut in_script) = (0, 0);
+        for v in map.values() {
+            if v.chars().any(|c| c.is_control() && c != '\n') {
+                return Some(format!("{v:?} has an escaped control character"));
+            }
+            // decomposed accents (NFD) draw as separate marks
+            if script == Script::Latin && v.chars().any(|c| ('\u{0300}'..='\u{036F}').contains(&c)) {
+                return Some(format!("{v:?} is not precomposed (NFC)"));
+            }
+            // letters are the language's own, or Latin for names like SSH and rclone
+            if let Some(c) = v.chars().find(|&c| c.is_alphabetic() && !latin(c) && !own(c)) {
+                return Some(format!("{v:?} has {c:?}, not in {script:?}"));
+            }
+            if v.chars().any(char::is_alphabetic) {
+                lettered += 1;
+                in_script += v.chars().any(own) as usize;
+            }
+        }
+        (in_script * 10 < lettered * 9).then(|| format!("only {in_script} of {lettered} strings are in {script:?}"))
+    }
+
+    /// Read from disk, not through `include_str!`, so the check covers the
+    /// bytes in the repository and any file missing from `LANGS`.
+    #[test]
+    fn translations_are_clean_utf8() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/i18n");
+        let mut on_disk: Vec<String> = std::fs::read_dir(&dir).unwrap().flatten().filter_map(|e| e.file_name().to_str()?.strip_suffix(".json").map(String::from)).collect();
+        on_disk.sort();
+        let mut listed: Vec<String> = LANGS.iter().skip(1).map(|l| l.code.to_string()).collect();
+        listed.sort();
+        assert_eq!(on_disk, listed, "every assets/i18n file must be in LANGS, and the other way round");
+        for l in LANGS.iter().skip(1) {
+            let bytes = std::fs::read(dir.join(format!("{}.json", l.code))).unwrap();
+            assert_eq!(encoding_problem(&bytes, l.script), None, "{}.json", l.code);
+        }
+    }
+
+    #[test]
+    fn encoding_check_catches_broken_files() {
+        let ok = |s: &str, script| encoding_problem(s.as_bytes(), script).is_none();
+        assert!(ok(r#"{"Scan": "Skannaa", "Delete": "Poista tiedosto: \"{name}\"", "a": "Größe « é\u00a0» SSH\n"}"#, Script::Latin));
+        assert!(ok(r#"{"Scan": "スキャン", "Rescan": "再スキャン", "Scan over SSH": "SSH でスキャン"}"#, Script::Cjk));
+        assert!(ok(r#"{"Scan": "Сканировать", "Size": "Размер"}"#, Script::Cyrillic));
+        assert!(ok(r#"{"Scan": "اسکن", "x": "می‌خواهید"}"#, Script::Arabic)); // with a zero-width non-joiner
+        let bad = |b: &[u8], script| encoding_problem(b, script).is_some();
+        assert!(bad(b"{\"a\": \"caf\xe9\"}", Script::Latin)); // Latin-1
+        assert!(bad(b"{\"a\": \"\xff\xfe\"}", Script::Latin));
+        assert!(bad("\u{FEFF}{\"a\": \"b\"}".as_bytes(), Script::Latin));
+        assert!(bad("{\"a\": \"b\"}\r\n".as_bytes(), Script::Latin));
+        assert!(bad("{\"a\": \"b\u{FFFD}\"}".as_bytes(), Script::Latin));
+        assert!(bad("{\"a\": \"PÃ¤ivitÃ¤\"}".as_bytes(), Script::Latin)); // "Päivitä" read as Latin-1
+        assert!(bad("{\"a\": \"donâ€™t\"}".as_bytes(), Script::Latin));
+        assert!(bad("{\"a\": \"Ð¡ÐºÐ°Ð½\"}".as_bytes(), Script::Cyrillic));
+        assert!(bad("{\"a\": \"b\\u0007\"}".as_bytes(), Script::Latin)); // escaped bell
+        assert!(bad("{\"a\": \"Pa\u{0308}ivita\u{0308}\"}".as_bytes(), Script::Latin)); // NFD
+        assert!(bad(r#"{"a": "Сканировать"}"#.as_bytes(), Script::Latin));
+        assert!(bad(r#"{"a": "Scan", "b": "Size", "c": "スキャン"}"#.as_bytes(), Script::Cjk)); // left in English
+        assert!(bad(b"[1, 2]", Script::Latin));
+    }
+
+    #[test]
+    fn finnish_is_offered() {
+        let fi = lang("fi");
+        assert_eq!((fi.code, fi.native), ("fi", "Suomi"));
+        let map: HashMap<&str, &str> = serde_json::from_str(fi.json).unwrap();
+        assert_eq!(map["Scan"], "Skannaa");
+        assert_eq!(resolve("fi"), "fi");
     }
 
     #[test]

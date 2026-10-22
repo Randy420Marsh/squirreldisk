@@ -164,6 +164,7 @@ fn render(tree: &Tree, id: u32, o: &Options, note: &str, from_app: Option<FromAp
 #[cfg(all(unix, feature = "gui"))]
 pub fn answer(scans: &std::sync::Mutex<crate::ipc::Scans>, request: &str) -> String {
     let Ok(o) = serde_json::from_str::<Options>(request) else { return String::new() };
+    #[cfg_attr(not(target_os = "macos"), allow(unused_mut, clippy::useless_vec))]
     let mut names = vec![o.path.to_string_lossy().into_owned()];
     // On macOS a startup-disk scan reaches the Data volume through its
     // firmlinks: /System/Volumes/Data/Users is the /Users it has.

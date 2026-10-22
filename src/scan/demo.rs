@@ -177,7 +177,7 @@ fn startup_disk_files(name: &str) -> Tree {
         b.folder(apps, n, (s * GB as f64) as u64, 3);
     }
     for i in 0..40 {
-        let name = format!("{}.app", ["Notes Pro", "PixelDraw", "Taskly", "Mailbird", "Cleanup", "Beatbox", "ScreenKit", "Markdown", "Ferry", "Orbit"][i % 10].to_string() + if i >= 10 { &["", " 2", " X", " Plus"][i / 10] } else { "" });
+        let name = format!("{}.app", ["Notes Pro", "PixelDraw", "Taskly", "Mailbird", "Cleanup", "Beatbox", "ScreenKit", "Markdown", "Ferry", "Orbit"][i % 10].to_string() + if i >= 10 { ["", " 2", " X", " Plus"][i / 10] } else { "" });
         let s = 80 * MB + b.rng.next() % (900 * MB);
         b.folder(apps, &name, s, 2);
     }

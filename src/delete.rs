@@ -343,24 +343,45 @@ impl Xoshiro {
     }
 }
 
-/// Overwrites the whole content of `path` with the DoD passes.
-/// `on_pass` is called after each pass has been flushed to disk.
-fn overwrite_file(path: &Path, len: u64, cancel: &AtomicBool, mut on_pass: impl FnMut()) -> Result<(), String> {
-    use std::io::{Seek, SeekFrom, Write};
-    let open = || std::fs::OpenOptions::new().write(true).open(path);
-    let mut f = match open() {
-        Ok(f) => f,
-        Err(_) => {
-            // read-only files (Windows attribute / unix mode): allow writing first
-            if let Ok(md) = std::fs::metadata(path) {
-                let mut perm = md.permissions();
-                #[allow(clippy::permissions_set_readonly_false)]
-                perm.set_readonly(false);
-                let _ = std::fs::set_permissions(path, perm);
-            }
-            open().map_err(|e| format!("{}: {e}", path.display()))?
-        }
+/// Opens `path` for writing, but only if it is still the regular file that
+/// was looked at (`md`). Between that look and now, someone with write access
+/// to the folder could swap the file for a symlink (or a FIFO) to something
+/// else, and the erase would then overwrite that instead.
+fn open_same_file(path: &Path, md: &std::fs::Metadata) -> std::io::Result<std::fs::File> {
+    let mut o = std::fs::OpenOptions::new();
+    o.write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        // a symlink fails with ELOOP; a FIFO without a reader fails instead of blocking
+        o.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        // open a symlink or junction itself, so the check below rejects it
+        o.custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let f = o.open(path)?;
+    let now = f.metadata()?;
+    #[cfg(unix)]
+    let same = {
+        use std::os::unix::fs::MetadataExt;
+        now.dev() == md.dev() && now.ino() == md.ino()
     };
+    #[cfg(not(unix))]
+    let same = md.is_file();
+    if now.is_file() && same {
+        Ok(f)
+    } else {
+        Err(std::io::Error::other("the file was replaced since it was scanned"))
+    }
+}
+
+/// Overwrites the first `len` bytes of `f` with the DoD passes.
+/// `on_pass` is called after each pass has been flushed to disk.
+fn overwrite_file(f: &mut std::fs::File, path: &Path, len: u64, cancel: &AtomicBool, mut on_pass: impl FnMut()) -> Result<(), String> {
+    use std::io::{Seek, SeekFrom, Write};
     let mut buf = vec![0u8; 1 << 20];
     let mut rng = Xoshiro::from_os();
     for pass in 0..OVERWRITE_PASSES {
@@ -390,8 +411,9 @@ fn overwrite_file(path: &Path, len: u64, cancel: &AtomicBool, mut on_pass: impl 
 
 fn shred_file(path: &Path, md: &std::fs::Metadata, p: &DeleteProgress) -> Result<(), String> {
     let alloc = crate::scan::platform::info(md, path).alloc;
-    // A file with other hard links is shared: overwriting it would destroy
-    // the data seen through the other names too, so just unlink it.
+    // A file with other hard links is shared: overwriting or truncating it
+    // would destroy the data seen through the other names too, so just
+    // unlink it.
     #[cfg(unix)]
     let shared = {
         use std::os::unix::fs::MetadataExt;
@@ -400,21 +422,35 @@ fn shred_file(path: &Path, md: &std::fs::Metadata, p: &DeleteProgress) -> Result
     #[cfg(not(unix))]
     let shared = false;
     let mut credited = 0u64;
-    if md.len() > 0 && !shared {
-        overwrite_file(path, md.len(), &p.cancel, || {
-            let step = alloc / OVERWRITE_PASSES as u64;
-            p.done_bytes.fetch_add(step, Ordering::Relaxed);
-            credited += step;
-        })?;
-    }
-    // hide the original name, drop the length, then remove
-    let mut rng = Xoshiro::from_os();
-    let scrambled = path.with_file_name(format!("{:016x}", rng.next()));
-    let target = if std::fs::rename(path, &scrambled).is_ok() { scrambled } else { path.to_path_buf() };
-    if let Ok(f) = std::fs::OpenOptions::new().write(true).open(&target) {
+    if !shared {
+        let mut f = match open_same_file(path, md) {
+            Ok(f) => f,
+            Err(_) => {
+                // read-only files (Windows attribute / unix mode): allow writing first
+                if std::fs::symlink_metadata(path).is_ok_and(|now| now.is_file()) {
+                    let mut perm = md.permissions();
+                    #[allow(clippy::permissions_set_readonly_false)]
+                    perm.set_readonly(false);
+                    let _ = std::fs::set_permissions(path, perm);
+                }
+                open_same_file(path, md).map_err(|e| format!("{}: {e}", path.display()))?
+            }
+        };
+        if md.len() > 0 {
+            overwrite_file(&mut f, path, md.len(), &p.cancel, || {
+                let step = alloc / OVERWRITE_PASSES as u64;
+                p.done_bytes.fetch_add(step, Ordering::Relaxed);
+                credited += step;
+            })?;
+        }
+        // drop the length through the same handle, never by name again
         let _ = f.set_len(0);
         let _ = f.sync_all();
     }
+    // hide the original name, then remove
+    let mut rng = Xoshiro::from_os();
+    let scrambled = path.with_file_name(format!("{:016x}", rng.next()));
+    let target = if std::fs::rename(path, &scrambled).is_ok() { scrambled } else { path.to_path_buf() };
     std::fs::remove_file(&target).map_err(|e| format!("{}: {e}", path.display()))?;
     p.done_bytes.fetch_add(alloc.saturating_sub(credited), Ordering::Relaxed);
     Ok(())
@@ -480,16 +516,20 @@ fn backup_to_folder(source: &Source, path: &str, dest: &Path, p: &DeleteProgress
             if let Some(parent) = dest.parent() {
                 std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
             }
-            let mut c = Command::new("scp");
-            crate::scan::remote::apply_ssh_options(&mut c, host);
-            let st = c
-                .args(["-r", "-p", "-q"])
-                .arg(format!("{host}:{}", sh_quote(path)))
-                .arg(dest)
-                .stdin(Stdio::null())
-                .status()
-                .map_err(|e| e.to_string())?;
-            if st.success() { Ok(()) } else { Err("scp backup failed".into()) }
+            // OpenSSH 8.7+ can copy over SFTP (the default since 9.0): no
+            // remote shell sees the path, only glob expansion. Older scp
+            // hands it to the remote shell, so it needs shell quoting.
+            let scp = |sftp: bool| {
+                let mut c = Command::new("scp");
+                crate::scan::remote::apply_ssh_options(&mut c, host);
+                if sftp {
+                    c.arg("-s");
+                }
+                let remote = if sftp { glob_escape(path) } else { sh_quote(path) };
+                c.args(["-r", "-p", "-q"]).arg(format!("{host}:{remote}")).arg(dest).stdin(Stdio::null()).status()
+            };
+            let ok = scp(true).is_ok_and(|st| st.success()) || scp(false).map_err(|e| e.to_string())?.success();
+            if ok { Ok(()) } else { Err("scp backup failed".into()) }
         }
         Source::Rclone { .. } => {
             let mut c = crate::rclone::command();
@@ -497,6 +537,18 @@ fn backup_to_folder(source: &Source, path: &str, dest: &Path, p: &DeleteProgress
             if st.success() { Ok(()) } else { Err("rclone backup failed".into()) }
         }
     }
+}
+
+/// Escapes the characters scp's SFTP mode would expand as a glob.
+fn glob_escape(path: &str) -> String {
+    let mut out = String::with_capacity(path.len());
+    for c in path.chars() {
+        if matches!(c, '[' | ']' | '*' | '?' | '\\') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
 }
 
 fn backup_rclone(source: &Source, path: &str, dest: &str) -> Result<(), String> {
@@ -580,7 +632,9 @@ mod tests {
         let original = b"top secret payload ".repeat(5000);
         fs::write(&f, &original).unwrap();
         let mut passes = 0;
-        overwrite_file(&f, original.len() as u64, &AtomicBool::new(false), || passes += 1).unwrap();
+        let mut h = open_same_file(&f, &fs::symlink_metadata(&f).unwrap()).unwrap();
+        overwrite_file(&mut h, &f, original.len() as u64, &AtomicBool::new(false), || passes += 1).unwrap();
+        drop(h);
         assert_eq!(passes, OVERWRITE_PASSES);
         let after = fs::read(&f).unwrap();
         assert_eq!(after.len(), original.len());
@@ -602,6 +656,55 @@ mod tests {
         assert!(base.join("keep.txt").exists());
         assert_eq!(fs::read_dir(&base).unwrap().count(), 1);
         fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn erase_never_writes_through_a_swapped_file() {
+        let base = fake_dir("swap");
+        let victim = base.join("keep.txt");
+        let f = base.join("junk/a.bin");
+        let md = fs::symlink_metadata(&f).unwrap();
+        // replaced by another file after the scan
+        fs::rename(base.join("junk/deep/b.bin"), &f).unwrap();
+        assert!(open_same_file(&f, &md).is_err());
+        // replaced by a link to a file the user wants to keep
+        fs::remove_file(&f).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&victim, &f).unwrap();
+        #[cfg(windows)]
+        if std::os::windows::fs::symlink_file(&victim, &f).is_err() {
+            // creating symlinks needs developer mode on Windows
+            fs::remove_dir_all(&base).unwrap();
+            return;
+        }
+        assert!(open_same_file(&f, &md).is_err());
+        assert_eq!(fs::read(&victim).unwrap(), b"keep me");
+        fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn erase_leaves_other_hard_links_intact() {
+        let base = fake_dir("hardlink");
+        fs::write(base.join("junk/a.bin"), b"shared data ".repeat(1000)).unwrap();
+        fs::hard_link(base.join("junk/a.bin"), base.join("other-name.bin")).unwrap();
+        let target = base.join("junk");
+        let items = vec![Item { node: 3, path: target.to_string_lossy().into(), size: 30_000 }];
+        let p = start(items, Mode::SecureErase, Source::Local, base.to_string_lossy().into());
+        wait(&p);
+        assert!(p.errors.lock().unwrap().is_empty(), "{:?}", p.errors.lock().unwrap());
+        assert!(!target.exists());
+        assert_eq!(fs::read(base.join("other-name.bin")).unwrap(), b"shared data ".repeat(1000));
+        fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn scp_paths_are_not_globbed() {
+        assert_eq!(glob_escape("/srv/plain name.txt"), "/srv/plain name.txt");
+        assert_eq!(glob_escape("/a/[x]*?.txt"), "/a/\\[x\\]\\*\\?.txt");
+        assert_eq!(glob_escape("/a\\b"), "/a\\\\b");
+        // quotes and $(...) need nothing: no shell is involved
+        assert_eq!(glob_escape("/it's $(x)"), "/it's $(x)");
     }
 
     #[test]

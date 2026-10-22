@@ -187,7 +187,7 @@ impl App {
             // Scrollable middle: title and buttons stay put.
             let body = Rect::from_min_max(Pos2::new(card.left(), card.top() + head), Pos2::new(card.right(), card.bottom() - 70.0));
             if ui.rect_contains_pointer(body) {
-                scroll -= ui.input(|i| i.smooth_scroll_delta.y);
+                scroll -= super::app::scroll_delta(ui);
             }
             scroll = scroll.clamp(0.0, (content_h - body.height()).max(0.0));
             ui.scope_builder(egui::UiBuilder::new().max_rect(body), |ui| {
@@ -299,7 +299,7 @@ impl App {
             let body = Rect::from_min_max(Pos2::new(card.left(), card.top() + 88.0), Pos2::new(card.right(), card.bottom() - 66.0));
             let max_scroll = (content_h - body.height()).max(0.0);
             if ui.rect_contains_pointer(body) {
-                scroll -= ui.input(|i| i.smooth_scroll_delta.y);
+                scroll -= super::app::scroll_delta(ui);
             }
             scroll = scroll.clamp(0.0, max_scroll);
             let mut end_y = 0.0;
@@ -309,8 +309,19 @@ impl App {
                 let mut y = top;
                 ui.painter().text(Pos2::new(x0, y), Align2::LEFT_TOP, tr("THEME"), bold(11.0), theme.text_faint);
                 y += 20.0;
-                let cols = 4;
+                // narrow (a phone, a small panel): two theme columns, and
+                // each control goes below its label instead of beside it
+                let narrow = w < 430.0;
+                let cols = if narrow { 2 } else { 4 };
                 let gap = 10.0;
+                // (top left of a row's control, its width, the room for the label, the row's height)
+                let ctl = |y: f32, cw: f32| {
+                    if narrow {
+                        (Pos2::new(x0, y + 44.0), cw.min(w), w, 86.0)
+                    } else {
+                        (Pos2::new(x0 + w - cw, y), cw, w - cw - 12.0, 50.0)
+                    }
+                };
                 let tw = (w - gap * (cols as f32 - 1.0)) / cols as f32;
                 let th = 76.0;
                 for (k, t) in themes.iter().enumerate() {
@@ -320,41 +331,65 @@ impl App {
                         new_theme = Some(t.name.to_string());
                     }
                 }
-                y += ((themes.len() + cols - 1) / cols) as f32 * (th + gap) + 12.0;
+                y += themes.len().div_ceil(cols) as f32 * (th + gap) + 12.0;
 
                 // language
-                let lang_row = Rect::from_min_size(Pos2::new(x0, y), Vec2::new(w, 44.0));
+                let (at, cw, room, row_h) = ctl(y, 220.0);
                 {
                     let p = ui.painter();
-                    p.text(Pos2::new(x0, lang_row.top() + 12.0), Align2::LEFT_CENTER, tr("Language"), bold(13.5), theme.text);
-                    p.text(Pos2::new(x0, lang_row.top() + 30.0), Align2::LEFT_CENTER, tr("Automatic follows your system language"), font(11.5), theme.text_dim);
+                    p.text(Pos2::new(x0, y + 12.0), Align2::LEFT_CENTER, tr("Language"), bold(13.5), theme.text);
+                    let sub = widgets::truncate(p, tr("Automatic follows your system language"), &font(11.5), room);
+                    p.text(Pos2::new(x0, y + 30.0), Align2::LEFT_CENTER, sub, font(11.5), theme.text_dim);
                 }
                 let current = if s.language == "auto" {
                     trf("Automatic ({language})", &[("language", &crate::i18n::lang(crate::i18n::current()).native)])
                 } else {
                     crate::i18n::lang(&s.language).native.to_string()
                 };
-                let lb = Rect::from_min_size(Pos2::new(x0 + w - 220.0, lang_row.top() + 6.0), Vec2::new(220.0, 32.0));
+                let lb = Rect::from_min_size(at + Vec2::new(0.0, 6.0), Vec2::new(cw, 32.0));
                 lang_btn = lb;
             if widgets::button(ui, lb, Id::new("lang-btn"), &current, Some(Icon::Forward), BtnStyle::Subtle, &theme).clicked() {
                     picker = !picker;
                 }
-                y += 50.0;
+                y += row_h;
 
                 // chart style: sunburst or treemap
+                let (at, _, room, row_h) = ctl(y, 220.0);
                 {
                     let p = ui.painter();
                     p.text(Pos2::new(x0, y + 12.0), Align2::LEFT_CENTER, tr("Chart style"), bold(13.5), theme.text);
-                    p.text(Pos2::new(x0, y + 30.0), Align2::LEFT_CENTER, tr("Rings (sunburst) or nested boxes (treemap)"), font(11.5), theme.text_dim);
+                    let sub = widgets::truncate(p, tr("Rings (sunburst) or nested boxes (treemap)"), &font(11.5), room);
+                    p.text(Pos2::new(x0, y + 30.0), Align2::LEFT_CENTER, sub, font(11.5), theme.text_dim);
                 }
                 for (k, (value, label)) in [("sunburst", tr("Sunburst")), ("treemap", tr("Treemap"))].into_iter().enumerate() {
-                    let r = Rect::from_min_size(Pos2::new(x0 + w - 220.0 + k as f32 * 112.0, y + 6.0), Vec2::new(108.0, 32.0));
+                    let r = Rect::from_min_size(at + Vec2::new(k as f32 * 112.0, 6.0), Vec2::new(108.0, 32.0));
                     let style = if s.chart_style == value { BtnStyle::Primary } else { BtnStyle::Subtle };
                     if widgets::button(ui, r, Id::new(("chart-style", k)), label, None, style, &theme).clicked() {
                         s.chart_style = value.to_string();
                     }
                 }
-                y += 50.0;
+                y += row_h;
+
+                // interface size: Ctrl +/− on a keyboard, these on a touch screen
+                let (at, _, room, row_h) = ctl(y, 128.0);
+                {
+                    let p = ui.painter();
+                    p.text(Pos2::new(x0, y + 12.0), Align2::LEFT_CENTER, tr("Interface size"), bold(13.5), theme.text);
+                    let sub = widgets::truncate(p, tr("Bigger text and buttons, for touch screens and small displays"), &font(11.5), room);
+                    p.text(Pos2::new(x0, y + 30.0), Align2::LEFT_CENTER, sub, font(11.5), theme.text_dim);
+                    let scale = if s.ui_scale.is_finite() { s.ui_scale.clamp(0.5, 2.0) } else { 1.0 };
+                    let pct = format!("{}%", (scale * 100.0).round());
+                    p.text(at + Vec2::new(64.0, 22.0), Align2::CENTER_CENTER, pct, bold(13.0), theme.text);
+                }
+                let minus = Rect::from_min_size(at + Vec2::new(0.0, 6.0), Vec2::new(36.0, 32.0));
+                let plus = Rect::from_min_size(at + Vec2::new(92.0, 6.0), Vec2::new(36.0, 32.0));
+                if widgets::button(ui, minus, Id::new("ui-scale-minus"), "\u{2212}", None, BtnStyle::Subtle, &theme).clicked() {
+                    s.ui_scale = super::app::stepped_scale(s.ui_scale, -0.1);
+                }
+                if widgets::button(ui, plus, Id::new("ui-scale-plus"), "+", None, BtnStyle::Subtle, &theme).clicked() {
+                    s.ui_scale = super::app::stepped_scale(s.ui_scale, 0.1);
+                }
+                y += row_h;
 
                 let rows: [(&str, &str, u8); 3] = [
                     (tr("Sound effects"), tr("Plops, crunches and a little fanfare"), 0),
@@ -365,6 +400,7 @@ impl App {
                     let r = Rect::from_min_size(Pos2::new(x0, y), Vec2::new(w, 44.0));
                     let p = ui.painter();
                     p.text(Pos2::new(r.left(), r.top() + 12.0), Align2::LEFT_CENTER, label, bold(13.5), theme.text);
+                    let sub = widgets::truncate(p, sub, &font(11.5), w - 60.0);
                     p.text(Pos2::new(r.left(), r.top() + 30.0), Align2::LEFT_CENTER, sub, font(11.5), theme.text_dim);
                     let tgl = Rect::from_center_size(Pos2::new(r.right() - 22.0, r.center().y), Vec2::new(44.0, 26.0));
                     let v = match k {
@@ -377,10 +413,13 @@ impl App {
                 }
                 let p = ui.painter();
                 p.text(Pos2::new(x0, y + 12.0), Align2::LEFT_CENTER, tr("Chart depth"), bold(13.5), theme.text);
-                p.text(Pos2::new(x0, y + 30.0), Align2::LEFT_CENTER, trf("{rings} rings — fewer is faster on old machines", &[("rings", &s.rings)]), font(11.5), theme.text_dim);
-                let sr = Rect::from_min_size(Pos2::new(x0 + w - 200.0, y + 8.0), Vec2::new(200.0, 28.0));
+                let sub = trf("{rings} rings — fewer is faster on old machines", &[("rings", &s.rings)]);
+                let (at, cw, room, row_h) = ctl(y, 200.0);
+                let sub = widgets::truncate(p, &sub, &font(11.5), room);
+                p.text(Pos2::new(x0, y + 30.0), Align2::LEFT_CENTER, sub, font(11.5), theme.text_dim);
+                let sr = Rect::from_min_size(at + Vec2::new(0.0, 8.0), Vec2::new(cw, 28.0));
                 widgets::stepper(ui, sr, Id::new("rings"), &mut s.rings, 3, 9, &theme);
-                y += 50.0;
+                y += row_h;
 
                 // system integration: the folder menu and the terminal command
                 let folder_menu = if cfg!(target_os = "macos") {
@@ -461,12 +500,16 @@ impl App {
             let p = ui.painter();
             p.line_segment([Pos2::new(x0, y), Pos2::new(x0 + w, y)], Stroke::new(1.0, with_alpha(theme.stroke, 0.7)));
             // No-network build: no update checks, so just the version.
-            let mut line = format!("SquirrelDisk {}", env!("CARGO_PKG_VERSION"));
+            let mut line = format!("SquirrelDisk {} · AGPL-3.0, no warranty", env!("CARGO_PKG_VERSION"));
             if let Some(e) = &gl_error {
                 line = format!("{line}  ·  {}", trf("CPU renderer ({reason})", &[("reason", e)]));
             }
             let line = widgets::truncate(p, &line, &font(12.0), w);
-            p.text(Pos2::new(x0, y + 26.0), Align2::LEFT_CENTER, line, font(12.0), theme.text_dim);
+            p.text(Pos2::new(x0, y + 18.0), Align2::LEFT_CENTER, line, font(12.0), theme.text_dim);
+            // AGPL-3.0 §5: say it's modified, under which license, and where the source is
+            let legal = format!("© Adileo Barone · {} · {}", tr("modified by Randy420Marsh"), crate::SOURCE_URL);
+            let legal = widgets::truncate(p, &legal, &font(11.0), w);
+            p.text(Pos2::new(x0, y + 38.0), Align2::LEFT_CENTER, legal, font(11.0), theme.text_faint);
             if picker {
                 // grid of languages drawn over the settings card
                 let cols = 3;
@@ -647,7 +690,7 @@ impl App {
         mut secure: bool,
     ) -> Option<Modal> {
         let theme = self.theme.clone();
-        let Some(s) = self.sessions.get(session) else { return None };
+        let s = self.sessions.get(session)?;
         let local = s.source().is_local();
         let has_rclone = matches!(*self.rclone.lock().unwrap(), super::app::RcloneState::Ready(_));
         let ok_items: Vec<&super::app::DeleteItem> = items.iter().filter(|i| !i.verdict.is_forbidden()).collect();
@@ -782,7 +825,7 @@ impl App {
 
     fn deleting_modal(&mut self, ctx: &egui::Context, session: usize, mut finished_at: Option<Instant>) -> Option<Modal> {
         let theme = self.theme.clone();
-        let Some(job) = self.sessions.get(session).and_then(|s| s.delete.clone()) else { return None };
+        let job = self.sessions.get(session).and_then(|s| s.delete.clone())?;
         let finished = job.finished.load(Ordering::Relaxed);
         if finished && finished_at.is_none() {
             finished_at = Some(Instant::now());

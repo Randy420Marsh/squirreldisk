@@ -399,7 +399,9 @@ impl App {
             if let Some(t) = &hit {
                 if matches!(t.kind, SegKind::Node(Kind::File)) && self.sessions[si].source().is_local() {
                     let path = self.sessions[si].tree.read().unwrap().path(t.node);
-                    super::app::os_open(&path, false);
+                    if super::app::os_open(&path, false) {
+                        self.toasts.push(tr("Programs and scripts are shown in the file manager, not run").into(), self.theme.accent);
+                    }
                 }
             }
         }

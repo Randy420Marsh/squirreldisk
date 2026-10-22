@@ -758,7 +758,7 @@ impl App {
         let list = Rect::from_min_max(Pos2::new(left.left(), rules_top + rules_h + 10.0), Pos2::new(left.right(), actions.top() - 10.0));
         self.dupes_list(ui, list, &mut d);
         self.dupes_actions(ui, actions, &mut d);
-        dupes_preview(ui, panel, &mut d, &theme);
+        dupes_preview(ui, panel, &mut d, &theme, &mut self.toasts);
         self.dupes_add_menu(ui, &mut d);
         self.dupes = Some(d);
     }
@@ -1112,7 +1112,7 @@ impl App {
         // scrolling
         let max_scroll = (d.content_h - list.height()).max(0.0);
         if self.modal.is_none() && d.add_menu.is_none() && ui.rect_contains_pointer(list) {
-            d.scroll -= ui.input(|i| i.smooth_scroll_delta.y);
+            d.scroll -= super::app::scroll_delta(ui);
         }
         if d.reveal {
             d.reveal = false;
@@ -1650,7 +1650,7 @@ fn dupes_rules(ui: &mut Ui, r: Rect, d: &mut DupesUi, theme: &Theme) -> f32 {
 }
 
 /// Right panel: a preview of the selected file, what it is and its copies.
-fn dupes_preview(ui: &mut Ui, panel: Rect, d: &mut DupesUi, theme: &Theme) {
+fn dupes_preview(ui: &mut Ui, panel: Rect, d: &mut DupesUi, theme: &Theme, toasts: &mut super::fx::Toasts) {
     let p = ui.painter().clone();
     widgets::shadow(&p, panel, 18.0, 0.5, theme);
     p.rect_filled(panel, cr(12.0), with_alpha(theme.surface, if theme.dark { 0.72 } else { 0.9 }));
@@ -1726,8 +1726,8 @@ fn dupes_preview(ui: &mut Ui, panel: Rect, d: &mut DupesUi, theme: &Theme) {
             if resp.hovered() {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
             }
-            if resp.clicked() {
-                super::app::os_open(&sel_path, reveal);
+            if resp.clicked() && super::app::os_open(&sel_path, reveal) {
+                toasts.push(tr("Programs and scripts are shown in the file manager, not run").into(), theme.accent);
             }
         }
     }

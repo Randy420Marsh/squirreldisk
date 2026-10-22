@@ -16,6 +16,9 @@ mod tree;
 
 #[cfg(feature = "gui")]
 mod disks;
+
+/// Where the source of this modified version is (AGPL-3.0 §6 and §13).
+pub const SOURCE_URL: &str = "github.com/Randy420Marsh/squirreldisk";
 mod dupes;
 #[cfg(feature = "gui")]
 mod i18n;
@@ -152,7 +155,7 @@ fn run_gui(folder: Option<std::path::PathBuf>) {
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("SquirrelDisk")
         .with_inner_size([1180.0, 760.0])
-        .with_min_inner_size([640.0, 400.0])
+        .with_min_inner_size([320.0, 320.0])
         .with_drag_and_drop(true)
         .with_icon(icon);
     // SQD_WINDOW=WxH (development: check layouts at a given size)
@@ -165,8 +168,9 @@ fn run_gui(folder: Option<std::path::PathBuf>) {
     if cfg!(target_os = "macos") {
         viewport = viewport.with_fullsize_content_view(true).with_titlebar_shown(false).with_title_shown(false);
     }
-    // centred at the default size; the app then sizes it to the screen
-    let options = eframe::NativeOptions { viewport, multisampling: 0, centered: true, ..Default::default() };
+    // Linux: eframe centres on the desktop, not the monitor, so the app
+    // places the window itself (see App::place_window)
+    let options = eframe::NativeOptions { viewport, multisampling: 0, centered: cfg!(any(target_os = "macos", windows)), ..Default::default() };
     if let Err(e) = eframe::run_native("SquirrelDisk", options, Box::new(|cc| {
         let mut app = ui::app::App::new(cc);
         app.open_at_start = folder;

@@ -30,12 +30,13 @@ impl App {
         self.window_drag_area(ui, Rect::from_min_size(screen.min, Vec2::new(screen.width(), 90.0 + TITLEBAR_INSET)));
 
 
-        let w = (screen.width() - 64.0).min(820.0);
+        let margin = if screen.width() < 520.0 { 16.0 } else { 32.0 };
+        let w = (screen.width() - 2.0 * margin).min(820.0);
         let x0 = screen.center().x - w / 2.0;
         // The page scrolls when the window is shorter than the content.
         let max_scroll = (self.home_content_h - screen.height()).max(0.0);
         if self.modal.is_none() && ui.rect_contains_pointer(screen) {
-            self.home_scroll -= ui.input(|i| i.smooth_scroll_delta.y);
+            self.home_scroll -= super::app::scroll_delta(ui);
         }
         self.home_scroll = self.home_scroll.clamp(0.0, max_scroll);
         let page_top = screen.top() - self.home_scroll;
@@ -54,7 +55,8 @@ impl App {
             });
             p.image(tex.id(), logo, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE);
             p.text(Pos2::new(x0 + 58.0, y + 8.0), Align2::LEFT_TOP, "SquirrelDisk", widgets::brand(26.0), theme.text);
-            p.text(Pos2::new(x0 + 59.0, y + 40.0), Align2::LEFT_TOP, tr("See what's using your disk space, and clean it up safely."), font(13.0), theme.text_dim);
+            let tagline = widgets::truncate(p, tr("See what's using your disk space, and clean it up safely."), &font(13.0), w - 59.0 - 40.0);
+            p.text(Pos2::new(x0 + 59.0, y + 40.0), Align2::LEFT_TOP, tagline, font(13.0), theme.text_dim);
         }
         let gear = Rect::from_center_size(Pos2::new(x0 + w - 18.0, y + 26.0), Vec2::splat(36.0));
         if widgets::icon_button(ui, gear, Id::new("settings"), Icon::Gear, &theme, true).clicked() {
@@ -94,8 +96,10 @@ impl App {
         y += 8.0;
         section_label(ui, Pos2::new(x0, y), tr("SCAN SOMETHING ELSE"), &theme);
         y += 22.0;
-        let gap = 14.0;
-        let cw = (w - gap * 2.0) / 3.0;
+        // side by side, or one under the other on a narrow window
+        let stacked = w < 520.0;
+        let gap = if stacked { 10.0 } else { 14.0 };
+        let (cw, ch) = if stacked { (w, 60.0) } else { ((w - gap * 2.0) / 3.0, 104.0) };
         let rclone_state = self.rclone.lock().unwrap().clone();
         let rclone_sub = match &rclone_state {
             RcloneState::Looking => tr("Looking for rclone…").to_string(),
@@ -109,7 +113,8 @@ impl App {
             (Icon::Cloud, tr("Cloud storage"), rclone_sub, 2),
         ];
         for (k, (icon, title, sub, action)) in cards.into_iter().enumerate() {
-            let rect = Rect::from_min_size(Pos2::new(x0 + k as f32 * (cw + gap), y), Vec2::new(cw, 104.0));
+            let at = if stacked { Pos2::new(x0, y + k as f32 * (ch + gap)) } else { Pos2::new(x0 + k as f32 * (cw + gap), y) };
+            let rect = Rect::from_min_size(at, Vec2::new(cw, ch));
             if source_card(ui, rect, Id::new(("src", k)), icon, title, &sub, &theme).clicked() {
                 match action {
                     0 => {
@@ -125,7 +130,7 @@ impl App {
                 }
             }
         }
-        y += 118.0;
+        y += if stacked { 3.0 * (ch + gap) + 4.0 } else { 118.0 };
 
         // --- tools
         section_label(ui, Pos2::new(x0, y), tr("TOOLS"), &theme);
@@ -196,6 +201,19 @@ impl App {
         let h = ui.ctx().animate_bool_with_time(id.with("h"), resp.hovered(), 0.15);
         let session = self.sessions.iter().position(|s| matches!(&s.target, Target::Volume(x) if x.mount == v.mount));
         let r = rect;
+        // right side: bar + button(s); a narrow card puts the bar under the
+        // name instead of between it and the button
+        let compact = r.width() < 560.0;
+        let bw = if compact { 84.0 } else { 104.0 };
+        let btn = Rect::from_min_size(Pos2::new(r.right() - bw - 14.0, r.center().y - 16.0), Vec2::new(bw, 32.0));
+        let text_x = r.left() + 72.0;
+        // leave room for the small refresh / cancel button that sits left of `btn`
+        let bar = if compact {
+            Rect::from_min_max(Pos2::new(text_x, r.top() + 42.0), Pos2::new(btn.left() - 44.0, r.top() + 50.0))
+        } else {
+            Rect::from_min_size(Pos2::new(btn.left() - 48.0 - 190.0, r.center().y - 10.0), Vec2::new(190.0, 8.0))
+        };
+        let name_w = if compact { bar.right() - text_x } else { bar.left() - 16.0 - text_x };
         {
             let p = ui.painter();
             widgets::shadow(p, r, 10.0, 0.5, &theme);
@@ -205,19 +223,20 @@ impl App {
             let tile = Rect::from_min_size(r.min + Vec2::new(14.0, 16.0), Vec2::splat(44.0));
             let tc = if v.is_boot { theme.accent } else if v.removable { theme.warn } else { theme.accent2 };
             p.rect_filled(tile, cr(8.0), tc);
-            widgets::draw_icon(p, if v.removable { Icon::External } else { Icon::Disk }, tile.shrink(10.0), Color32::WHITE);
-            // texts
-            p.text(Pos2::new(tile.right() + 14.0, r.top() + 26.0), Align2::LEFT_CENTER, &v.name, bold(15.0), theme.text);
-            let kind = if v.is_boot { tr("startup disk") } else if v.removable { tr("removable") } else { tr("volume") };
-            let sub = format!("{} · {} · {} · {}", fmt_size(v.total), kind, v.fs, v.mount);
+            let icon = if v.network { Icon::Server } else if v.removable { Icon::External } else { Icon::Disk };
+            widgets::draw_icon(p, icon, tile.shrink(10.0), Color32::WHITE);
+            // texts (on a narrow card the bar takes the second line)
+            let name = widgets::truncate(p, &v.name, &bold(15.0), name_w);
+            p.text(Pos2::new(tile.right() + 14.0, r.top() + 26.0), Align2::LEFT_CENTER, name, bold(15.0), theme.text);
+            let kind = if v.is_boot { tr("startup disk") } else if v.network { tr("network share") } else if v.removable { tr("removable") } else { tr("volume") };
+            // a share's size can still be on its way (see `disks::share_space`)
+            let size = if v.total == 0 { "…".to_string() } else { fmt_size(v.total) };
+            let sub = format!("{} · {} · {} · {}", size, kind, v.fs, v.mount);
             let sub = widgets::truncate(p, &sub, &font(12.0), r.width() - 480.0);
-            p.text(Pos2::new(tile.right() + 14.0, r.top() + 48.0), Align2::LEFT_CENTER, sub, font(12.0), theme.text_dim);
+            if !compact {
+                p.text(Pos2::new(tile.right() + 14.0, r.top() + 48.0), Align2::LEFT_CENTER, sub, font(12.0), theme.text_dim);
+            }
         }
-
-        // right side: bar + button(s)
-        let btn = Rect::from_min_size(Pos2::new(r.right() - 118.0, r.center().y - 16.0), Vec2::new(104.0, 32.0));
-        // leave room for the small refresh / cancel button that sits left of `btn`
-        let bar = Rect::from_min_size(Pos2::new(btn.left() - 48.0 - 190.0, r.center().y - 10.0), Vec2::new(190.0, 8.0));
         let p = ui.painter().clone();
         match session.map(|s| &self.sessions[s]) {
             Some(s) if s.is_scanning() => {
@@ -241,8 +260,12 @@ impl App {
                 let used = v.used_frac();
                 let col = if used > 0.9 { theme.danger } else if used > 0.75 { theme.warn } else { theme.ok };
                 widgets::progress_bar(&p, bar, Some(used), &theme, 0.25, Some(col));
-                p.text(Pos2::new(bar.right(), bar.bottom() + 12.0), Align2::RIGHT_CENTER, trf("{size} free", &[("size", &fmt_size(v.available))]), bold(12.0), col);
-                p.text(Pos2::new(bar.left(), bar.bottom() + 12.0), Align2::LEFT_CENTER, trf("{size} used", &[("size", &fmt_size(v.used()))]), font(11.5), theme.text_faint);
+                if v.total > 0 {
+                    p.text(Pos2::new(bar.right(), bar.bottom() + 12.0), Align2::RIGHT_CENTER, trf("{size} free", &[("size", &fmt_size(v.available))]), bold(12.0), col);
+                    if !compact {
+                        p.text(Pos2::new(bar.left(), bar.bottom() + 12.0), Align2::LEFT_CENTER, trf("{size} used", &[("size", &fmt_size(v.used()))]), font(11.5), theme.text_faint);
+                    }
+                }
                 if other.is_some() {
                     if widgets::button(ui, btn, id.with("view"), tr("View"), Some(Icon::Eye), BtnStyle::Primary, &theme).clicked() || resp.clicked() {
                         self.screen = Screen::Session(session.unwrap());
@@ -252,11 +275,11 @@ impl App {
                     if widgets::icon_button(ui, rr, id.with("rescan"), Icon::Refresh, &theme, true).clicked() {
                         self.start_session(Target::Volume(v.clone()));
                     }
-                } else if {
+                } else {
                     self.mark(format!("scan:{}", v.mount), btn);
-                    widgets::button(ui, btn, id.with("scan"), tr("Scan"), Some(Icon::Bolt), BtnStyle::Primary, &theme).clicked() || resp.clicked()
-                } {
-                    self.start_session(Target::Volume(v.clone()));
+                    if widgets::button(ui, btn, id.with("scan"), tr("Scan"), Some(Icon::Bolt), BtnStyle::Primary, &theme).clicked() || resp.clicked() {
+                        self.start_session(Target::Volume(v.clone()));
+                    }
                 }
             }
         }
@@ -296,9 +319,11 @@ impl App {
             let tile = Rect::from_min_size(r.min + Vec2::new(12.0, 12.0), Vec2::splat(40.0));
             p.rect_filled(tile, cr(8.0), with_alpha(theme.accent, 0.25));
             widgets::draw_icon(p, icon, tile.shrink(10.0), theme.accent);
-            let t2 = widgets::truncate(p, &title, &bold(14.0), r.width() - 260.0);
+            // up to the close button, left of the 118-point wide View button
+            let room = r.width() - 118.0 - 44.0 - 64.0;
+            let t2 = widgets::truncate(p, &title, &bold(14.0), room);
             p.text(Pos2::new(tile.right() + 12.0, r.top() + 22.0), Align2::LEFT_CENTER, t2, bold(14.0), theme.text);
-            let st = widgets::truncate(p, &status, &font(12.0), r.width() - 260.0);
+            let st = widgets::truncate(p, &status, &font(12.0), room);
             p.text(Pos2::new(tile.right() + 12.0, r.top() + 42.0), Align2::LEFT_CENTER, st, font(12.0), theme.text_dim);
         }
         let btn = Rect::from_min_size(Pos2::new(rect.right() - 118.0, rect.center().y - 16.0), Vec2::new(104.0, 32.0));
@@ -329,12 +354,13 @@ fn tool_card(ui: &mut Ui, rect: Rect, id: Id, icon: Icon, title: &str, sub: &str
         let tile = Rect::from_min_size(r.min + Vec2::new(12.0, 12.0), Vec2::splat(40.0));
         widgets::rounded_hgradient(p, tile, 8.0, theme.accent, theme.accent2);
         widgets::draw_icon(p, icon, tile.shrink(10.0), Color32::WHITE);
+        let title = widgets::truncate(p, title, &bold(14.0), r.width() - 118.0 - 64.0 - 8.0);
         p.text(Pos2::new(tile.right() + 12.0, r.top() + 22.0), Align2::LEFT_CENTER, title, bold(14.0), theme.text);
         let status = match running {
             Some(true) => tr("Comparing…").to_string(),
             _ => sub.to_string(),
         };
-        let st = widgets::truncate(p, &status, &font(12.0), r.width() - 200.0);
+        let st = widgets::truncate(p, &status, &font(12.0), r.width() - 118.0 - 64.0 - 8.0);
         p.text(Pos2::new(tile.right() + 12.0, r.top() + 42.0), Align2::LEFT_CENTER, st, font(12.0), theme.text_dim);
     }
     let btn = Rect::from_min_size(Pos2::new(rect.right() - 118.0, rect.center().y - 16.0), Vec2::new(104.0, 32.0));
@@ -353,11 +379,16 @@ fn source_card(ui: &mut Ui, rect: Rect, id: Id, icon: Icon, title: &str, sub: &s
     
     p.rect_filled(r, cr(10.0), lerp_color(with_alpha(theme.surface, 0.8), theme.surface_hi, h));
     p.rect_stroke(r, cr(10.0), Stroke::new(1.0, lerp_color(with_alpha(theme.stroke, 0.6), theme.accent, h * 0.7)), egui::StrokeKind::Inside);
-    let ic = Pos2::new(r.left() + 30.0, r.top() + 32.0);
+    // a short, wide card (stacked on a narrow window) has the icon on the left
+    let row = r.width() > r.height() * 2.5;
+    let ic = if row { Pos2::new(r.left() + 30.0, r.center().y) } else { Pos2::new(r.left() + 30.0, r.top() + 32.0) };
     p.rect_filled(Rect::from_center_size(ic, Vec2::splat(34.0)), cr(8.0), with_alpha(lighten(theme.accent, 0.05), 0.18 + 0.1 * h));
     widgets::draw_icon(p, icon, Rect::from_center_size(ic, Vec2::splat(20.0)), lerp_color(theme.accent, theme.text, h * 0.5));
-    p.text(Pos2::new(r.left() + 16.0, r.top() + 66.0), Align2::LEFT_CENTER, title, bold(14.0), theme.text);
-    let s = widgets::truncate(p, sub, &font(11.5), r.width() - 28.0);
-    p.text(Pos2::new(r.left() + 16.0, r.top() + 86.0), Align2::LEFT_CENTER, s, font(11.5), theme.text_dim);
+    let (tx, ty) = if row { (r.left() + 60.0, r.top() + 21.0) } else { (r.left() + 16.0, r.top() + 66.0) };
+    let room = r.right() - 12.0 - tx;
+    let title = widgets::truncate(p, title, &bold(14.0), room);
+    p.text(Pos2::new(tx, ty), Align2::LEFT_CENTER, title, bold(14.0), theme.text);
+    let s = widgets::truncate(p, sub, &font(11.5), room);
+    p.text(Pos2::new(tx, ty + 20.0), Align2::LEFT_CENTER, s, font(11.5), theme.text_dim);
     resp
 }

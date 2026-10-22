@@ -274,6 +274,7 @@ pub enum Modal {
 
 /// Drives the animated Dock tile on macOS.
 #[derive(Default)]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub struct DockState {
     shown: bool,
     scanning: bool,
@@ -335,6 +336,7 @@ pub struct App {
     pub update_restart: bool,
     /// App icon as a texture, for the home header.
     pub logo: Option<egui::TextureHandle>,
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub dock: DockState,
     pub director: Option<super::director::Director>,
     /// Named rects of clickable things, for the demo director.
@@ -634,13 +636,11 @@ impl App {
         }
     }
 
-    /// Opens the window centred on the screen the user is working on and
-    /// sized to it (see [`super::placement`]). The screen is only known once
-    /// the window exists, hence here, on the first frames.
     /// Scales the whole interface with the window: at the usual size and
     /// below, one point stays one point; a bigger window draws everything
-    /// bigger, and a window smaller than the layout's minimum (860×560
-    /// points) shrinks it to fit. `ui_scale` multiplies the result.
+    /// bigger, and a window smaller than the layout's minimum (600×360
+    /// points, either way up: a phone held upright is 360 wide) shrinks it
+    /// to fit. `ui_scale` multiplies the result.
     fn auto_scale(&mut self, ctx: &egui::Context) {
         use egui::gui_zoom::kb_shortcuts::{ZOOM_IN, ZOOM_IN_SECONDARY, ZOOM_OUT, ZOOM_RESET};
         let step = ctx.input_mut(|i| {
@@ -655,19 +655,19 @@ impl App {
             }
         });
         if let Some(step) = step {
-            let s = if step == 0.0 { 1.0 } else { self.settings.ui_scale + step };
-            self.settings.ui_scale = ((s * 10.0).round() / 10.0).clamp(0.5, 2.0);
+            self.settings.ui_scale = stepped_scale(self.settings.ui_scale, step);
             self.settings.save();
         }
         // window size in points at zoom 1
-        let base = ctx.content_rect().size() * ctx.zoom_factor();
-        let fit = (base.x / 1080.0).min(base.y / 720.0).clamp(1.0, 2.5) * self.settings.ui_scale.clamp(0.5, 2.0);
-        let z = fit.min(base.x / 860.0).min(base.y / 560.0).max(0.5);
+        let z = zoom_for(ctx.content_rect().size() * ctx.zoom_factor(), self.settings.ui_scale);
         if (z - ctx.zoom_factor()).abs() > 0.01 {
             ctx.set_zoom_factor(z);
         }
     }
 
+    /// Opens the window centred on the screen the user is working on and
+    /// sized to it (see [`super::placement`]). The screen is only known once
+    /// the window exists, hence here, on the first frames.
     fn place_window(&mut self, ctx: &egui::Context, frame: &eframe::Frame) {
         use super::placement::{fit, on_active_screen, Placed};
         if self.placing == u8::MAX {
@@ -678,11 +678,32 @@ impl App {
         match on_active_screen(frame) {
             Placed::Done => self.placing = u8::MAX,
             Placed::Again if self.placing < 5 => {}
+            Placed::Area(ax, ay, aw, ah) => {
+                self.placing = u8::MAX;
+                let native = ctx.native_pixels_per_point().unwrap_or(1.0) as f64;
+                let (w, h) = fit((aw, ah), native);
+                if w >= aw || h >= ah {
+                    // a small screen (an old monitor, a Raspberry Pi panel)
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true));
+                    return;
+                }
+                // egui takes points at the current zoom
+                let ppp = ctx.pixels_per_point() as f64;
+                let (inner, outer) = ctx.input(|i| (i.viewport().inner_rect, i.viewport().outer_rect));
+                let frame = match (inner, outer) {
+                    (Some(i), Some(o)) => (o.size() - i.size()) * ppp as f32, // title bar and borders
+                    _ => egui::Vec2::ZERO,
+                };
+                let x = ax + (aw - w - frame.x as f64) / 2.0;
+                let y = ay + (ah - h - frame.y as f64) / 2.0;
+                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2((w / ppp) as f32, (h / ppp) as f32)));
+                ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2((x / ppp) as f32, (y / ppp) as f32)));
+            }
             _ => {
-                // fallback: the screen egui reports (the primary one, where
-                // `centered` opened the window), in points
-                let (monitor, inner, outer) = ctx.input(|i| (i.viewport().monitor_size, i.viewport().inner_rect, i.viewport().outer_rect));
-                let (Some(monitor), Some(inner), Some(outer)) = (monitor, inner, outer) else {
+                // fallback (Wayland): only the size of the screen egui
+                // reports, in points; where the window goes is up to the
+                // compositor
+                let Some(monitor) = ctx.input(|i| i.viewport().monitor_size) else {
                     // not reported yet: try again for a few frames, then keep the default
                     if self.placing > 30 {
                         self.placing = u8::MAX;
@@ -695,10 +716,13 @@ impl App {
                 }
                 let (w, h) = fit((monitor.x as f64, monitor.y as f64), 1.0);
                 let size = egui::vec2(w as f32, h as f32);
-                let frame = outer.size() - inner.size(); // title bar and borders
-                let pos = ((monitor - size - frame) / 2.0).max(egui::Vec2::ZERO);
-                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
-                ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(pos.to_pos2()));
+                if size.x >= monitor.x || size.y >= monitor.y {
+                    // a small screen: the whole monitor would overlap the
+                    // panels and docks, which only the compositor knows about
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true));
+                } else {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
+                }
             }
         }
     }
@@ -1072,8 +1096,75 @@ impl eframe::App for App {
     }
 }
 
-/// Opens a path with the OS default handler, or reveals it in the file manager.
-pub fn os_open(path: &str, reveal: bool) {
+/// Extensions the OS runs, installs or follows instead of just showing:
+/// programs, scripts, shortcuts, installers, app bundles. Compared lowercase.
+const LAUNCHABLE: &[&str] = &[
+    // Windows
+    "exe", "com", "bat", "cmd", "ps1", "psm1", "psd1", "vbs", "vbe", "js", "jse", "wsf", "wsh", "msi", "msp", "mst", "scr", "pif", "lnk", "url",
+    "hta", "cpl", "reg", "inf", "scf", "msc", "gadget", "application", "appref-ms", "settingcontent-ms", "appx", "appxbundle", "msix",
+    "msixbundle", "library-ms", "search-ms", "diagcab", "chm", "xll",
+    // Linux, macOS and anywhere with an interpreter
+    "sh", "bash", "zsh", "ksh", "csh", "fish", "command", "tool", "desktop", "appimage", "run", "bin", "py", "pyw", "pyz", "pl", "rb", "jar",
+    "terminal", "scpt", "scptd", "applescript", "workflow", "action", "app", "prefpane", "saver", "pkg", "mpkg", "deb", "rpm", "flatpakref",
+    "flatpak", "snap", "webloc", "inetloc",
+];
+
+/// True for files that opening would run rather than show. A scanned disk can
+/// hold anything, so a double-click must never start a program someone left
+/// there: we reveal these in the file manager instead.
+pub fn is_launchable(path: &std::path::Path) -> bool {
+    fn ext_hit(p: &std::path::Path) -> bool {
+        // Windows drops trailing dots and spaces, so "x.exe." runs x.exe
+        let Some(name) = p.file_name().and_then(|n| n.to_str()) else { return false };
+        let name = name.trim_end_matches(['.', ' ']);
+        name.rsplit_once('.').is_some_and(|(stem, ext)| !stem.is_empty() && LAUNCHABLE.contains(&ext.to_ascii_lowercase().as_str()))
+    }
+    // a symlink opens its target, so check both names
+    if ext_hit(path) || std::fs::canonicalize(path).is_ok_and(|t| ext_hit(&t)) {
+        return true;
+    }
+    #[cfg(unix)]
+    {
+        use std::io::Read;
+        use std::os::unix::fs::PermissionsExt;
+        let Ok(md) = std::fs::metadata(path) else { return false };
+        if !md.is_file() || md.permissions().mode() & 0o111 == 0 {
+            return false;
+        }
+        // macOS runs any extensionless executable in Terminal
+        if path.extension().is_none() {
+            return true;
+        }
+        // FAT/NTFS mounts mark every file executable, so for the rest only
+        // real programs count: ELF, Mach-O, or a #! script
+        let mut head = [0u8; 4];
+        let n = std::fs::File::open(path).and_then(|mut f| f.read(&mut head)).unwrap_or(0);
+        let head = &head[..n];
+        head.starts_with(b"#!")
+            || head == b"\x7fELF"
+            || matches!(head, [0xfe, 0xed, 0xfa, 0xce | 0xcf] | [0xce | 0xcf, 0xfa, 0xed, 0xfe] | [0xca, 0xfe, 0xba, 0xbe])
+    }
+    #[cfg(not(unix))]
+    false
+}
+
+/// Opens a scanned file with its default app, or reveals it in the file
+/// manager. Programs and scripts are always revealed (see [`is_launchable`]);
+/// returns true when that happened, so the caller can say why.
+pub fn os_open(path: &str, reveal: bool) -> bool {
+    let guarded = !reveal && is_launchable(std::path::Path::new(path));
+    os_launch(path, reveal || guarded);
+    guarded
+}
+
+/// Opens a web page in the browser. Only http(s), so it can't run anything.
+pub fn open_url(url: &str) {
+    if url.starts_with("https://") || url.starts_with("http://") {
+        os_launch(url, false);
+    }
+}
+
+fn os_launch(path: &str, reveal: bool) {
     let mut cmd;
     #[cfg(target_os = "macos")]
     {
@@ -1105,9 +1196,127 @@ pub fn os_open(path: &str, reveal: bool) {
     let _ = cmd.spawn();
 }
 
+/// `ui_scale` after Ctrl + (`step` 0.1), Ctrl − (−0.1) or Ctrl 0 (0): in
+/// tenths, from 0.5 to 2.
+pub fn stepped_scale(ui_scale: f32, step: f32) -> f32 {
+    let s = if step == 0.0 || !ui_scale.is_finite() { 1.0 } else { ui_scale + step };
+    ((s * 10.0).round() / 10.0).clamp(0.5, 2.0)
+}
+
+/// How far to scroll a page this frame: the wheel or touchpad, or a finger
+/// dragging on a touch screen (egui only turns that into scrolling inside
+/// its own scroll areas, which these pages don't use).
+pub fn scroll_delta(ui: &egui::Ui) -> f32 {
+    ui.input(|i| {
+        let touch = if i.any_touches() && i.pointer.is_decidedly_dragging() { i.pointer.delta().y } else { 0.0 };
+        i.smooth_scroll_delta.y + touch
+    })
+}
+
+/// The smallest window, in points, the layout is made for: the short side
+/// and the long side, whichever way up.
+pub const MIN_SHORT: f32 = 360.0;
+pub const MIN_LONG: f32 = 600.0;
+
+/// The zoom for a window of `base` points (at zoom 1), as in
+/// [`App::auto_scale`].
+fn zoom_for(base: egui::Vec2, ui_scale: f32) -> f32 {
+    let ui_scale = if ui_scale.is_finite() { ui_scale.clamp(0.5, 2.0) } else { 1.0 };
+    let fit = (base.x / 1080.0).min(base.y / 720.0).clamp(1.0, 2.5) * ui_scale;
+    let (short, long) = (base.x.min(base.y), base.x.max(base.y));
+    fit.min(short / MIN_SHORT).min(long / MIN_LONG).max(0.5)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn interface_scales_with_the_window() {
+        let z = |w, h, s| zoom_for(egui::vec2(w, h), s);
+        // the usual size and the layout's minimum, either way up, draw at 1
+        assert_eq!(z(1080.0, 720.0, 1.0), 1.0);
+        assert_eq!(z(600.0, 360.0, 1.0), 1.0);
+        assert_eq!(z(360.0, 600.0, 1.0), 1.0);
+        // small screens: an 800×480 panel, an old 640×480 monitor, a phone
+        assert_eq!(z(800.0, 440.0, 1.0), 1.0);
+        assert_eq!(z(640.0, 420.0, 1.0), 1.0);
+        assert_eq!(z(360.0, 792.0, 1.0), 1.0);
+        // bigger windows grow by the tighter side, up to 2.5
+        assert_eq!(z(2160.0, 1440.0, 1.0), 2.0);
+        assert_eq!(z(2160.0, 720.0, 1.0), 1.0);
+        assert_eq!(z(7680.0, 4320.0, 1.0), 2.5);
+        // a window below the minimum shrinks the layout to fit, down to 0.5
+        assert_eq!(z(300.0, 600.0, 1.0), 300.0 / 360.0);
+        assert_eq!(z(450.0, 270.0, 1.0), 0.75);
+        assert_eq!(z(100.0, 100.0, 1.0), 0.5);
+        // the user's scale multiplies, but never past what fits
+        assert_eq!(z(1080.0, 720.0, 1.2), 1.2);
+        assert_eq!(z(1080.0, 720.0, 2.0), 1080.0 / 600.0);
+        assert_eq!(z(2160.0, 1440.0, 1.5), 3.0);
+        assert_eq!(z(1080.0, 720.0, 0.5), 0.5);
+        assert_eq!(z(800.0, 440.0, 1.3), 440.0 / 360.0);
+        // out-of-range values (a hand-edited settings file, SQD_ZOOM) are held in
+        assert_eq!(z(1080.0, 720.0, 100.0), 1080.0 / 600.0);
+        assert_eq!(z(1080.0, 720.0, -3.0), 0.5);
+        assert_eq!(z(1080.0, 720.0, f32::NAN), 1.0);
+        assert_eq!(z(1080.0, 720.0, f32::INFINITY), 1.0);
+        assert_eq!(z(0.0, 0.0, 1.0), 0.5);
+    }
+
+    #[test]
+    fn zoom_keys_step_in_tenths() {
+        assert_eq!(stepped_scale(1.0, 0.1), 1.1);
+        assert_eq!(stepped_scale(1.0, -0.1), 0.9);
+        assert_eq!(stepped_scale(1.7, 0.0), 1.0);
+        assert_eq!(stepped_scale(2.0, 0.1), 2.0);
+        assert_eq!(stepped_scale(0.5, -0.1), 0.5);
+        assert_eq!(stepped_scale(f32::NAN, 0.1), 1.0);
+        // ten presses up and back land on 1 exactly, not 0.99999
+        let up = (0..10).fold(1.0, |s, _| stepped_scale(s, 0.1));
+        assert_eq!(up, 2.0);
+        assert_eq!((0..10).fold(up, |s, _| stepped_scale(s, -0.1)), 1.0);
+    }
+
+    #[test]
+    fn programs_are_revealed_not_run() {
+        let dir = std::env::temp_dir().join(format!("sqd-test-launch-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("Tool.app")).unwrap();
+        let file = |name: &str, body: &[u8]| {
+            let p = dir.join(name);
+            std::fs::write(&p, body).unwrap();
+            p
+        };
+        for name in ["setup.exe", "RUN.BAT", "x.ps1", "Shortcut.lnk", "a.desktop", "go.sh", "evil.exe.", "evil.exe ", "f.AppImage", "s.command"] {
+            assert!(is_launchable(&file(name, b"")), "{name}");
+        }
+        assert!(is_launchable(&dir.join("Tool.app")));
+        for name in ["photo.jpg", "notes.txt", "song.mp3", "archive.zip", ".exe", "exe", "readme"] {
+            assert!(!is_launchable(&file(name, b"hello")), "{name}");
+        }
+        assert!(!is_launchable(&dir.join("missing.txt")));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let exec = |p: &std::path::Path| std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o755)).unwrap();
+            // an executable with no extension, or a real program with any name
+            for (name, body) in [("tool", &b"data"[..]), ("x.txt", b"#!/bin/sh\n"), ("y.dat", b"\x7fELF\x02"), ("z.so", &[0xcf, 0xfa, 0xed, 0xfe][..])] {
+                let p = file(name, body);
+                exec(&p);
+                assert!(is_launchable(&p), "{name}");
+            }
+            // FAT/NTFS mounts mark everything executable; a photo is still a photo
+            let p = file("pic.jpg", &[0xff, 0xd8, 0xff, 0xe0]);
+            exec(&p);
+            assert!(!is_launchable(&p));
+            // a harmless name pointing at a program opens the program
+            let link = dir.join("innocent.txt");
+            std::os::unix::fs::symlink(dir.join("setup.exe"), &link).unwrap();
+            assert!(is_launchable(&link));
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn system_fonts_share_inters_baseline() {

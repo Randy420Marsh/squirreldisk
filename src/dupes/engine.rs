@@ -978,7 +978,7 @@ impl Cache {
         let mut c = Cache::default();
         let Some(bytes) = Self::path().and_then(|p| std::fs::read(p).ok()) else { return c };
         const REC: usize = 8 * 4 + 1 + 16 * SLOTS;
-        for r in bytes.chunks_exact(REC) {
+        for r in bytes.as_chunks::<REC>().0 {
             let u = |k: usize| u64::from_le_bytes(r[k * 8..k * 8 + 8].try_into().unwrap());
             let has = r[32];
             let slot = |k: usize| (has & (1 << k) != 0).then(|| <[u8; 16]>::try_from(&r[33 + 16 * k..49 + 16 * k]).unwrap());

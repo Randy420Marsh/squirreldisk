@@ -144,11 +144,7 @@ impl App {
                         d.trash_menu = true;
                     }
                 }
-                Ok("delete") => {
-                    if !self.sessions.is_empty() {
-                        self.open_delete_confirm(0)
-                    }
-                }
+                Ok("delete") if !self.sessions.is_empty() => self.open_delete_confirm(0),
                 _ => {}
             }
         }

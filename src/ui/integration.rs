@@ -284,6 +284,11 @@ pub fn cli_status() -> Cli {
             // a link into target/ breaks as soon as the next build replaces it
             return Cli::Unavailable(tr("Not available in development builds").to_string());
         }
+        // installed by a package (the .deb, the Arch package) as
+        // /usr/bin/squirreldisk: already a command, no link needed
+        if t.file_name().is_some_and(|n| n == "squirreldisk") && cli_on_path(&t) {
+            return Cli::Installed(t);
+        }
         match std::fs::read_link(&link) {
             Ok(to) if to == exe => Cli::Installed(link),
             _ if link.symlink_metadata().is_ok() => Cli::Taken(link),

@@ -74,10 +74,21 @@ impl App {
         self.top_bar(ui, bar, si);
 
         let body = Rect::from_min_max(Pos2::new(screen.left(), bar.bottom() + 4.0), screen.max);
-        let panel_w = (body.width() * 0.36).clamp(300.0, 440.0);
-        let panel = Rect::from_min_max(Pos2::new(body.right() - panel_w - 16.0, body.top() + 6.0), Pos2::new(body.right() - 16.0, body.bottom() - 16.0));
-        let chart = Rect::from_min_max(Pos2::new(body.left() + 8.0, body.top()), Pos2::new(panel.left() - 8.0, body.bottom() - 76.0));
-        let collector = Rect::from_min_size(Pos2::new(body.left() + 20.0, body.bottom() - 70.0), Vec2::new((chart.width() - 24.0).min(460.0), 54.0));
+        let (chart, panel, collector) = if body.width() < 620.0 && body.height() > body.width() {
+            // narrow and tall (a phone, a portrait panel): chart, collector,
+            // then the list below them
+            let chart_h = (body.height() * 0.5).min(body.width()).max(180.0);
+            let chart = Rect::from_min_max(Pos2::new(body.left() + 4.0, body.top()), Pos2::new(body.right() - 4.0, body.top() + chart_h));
+            let collector = Rect::from_min_size(Pos2::new(body.left() + 12.0, chart.bottom() + 4.0), Vec2::new((body.width() - 24.0).min(460.0), 54.0));
+            let panel = Rect::from_min_max(Pos2::new(body.left() + 8.0, collector.bottom() + 8.0), Pos2::new(body.right() - 8.0, body.bottom() - 8.0));
+            (chart, panel, collector)
+        } else {
+            let panel_w = (body.width() * 0.38).clamp(240.0, 440.0);
+            let panel = Rect::from_min_max(Pos2::new(body.right() - panel_w - 16.0, body.top() + 6.0), Pos2::new(body.right() - 16.0, body.bottom() - 16.0));
+            let chart = Rect::from_min_max(Pos2::new(body.left() + 8.0, body.top()), Pos2::new(panel.left() - 8.0, body.bottom() - 76.0));
+            let collector = Rect::from_min_size(Pos2::new(body.left() + 20.0, body.bottom() - 70.0), Vec2::new((chart.width() - 24.0).min(460.0), 54.0));
+            (chart, panel, collector)
+        };
 
         if self.settings.chart_style == "treemap" {
             self.treemap_ui(ui, chart, panel, si);
@@ -286,8 +297,8 @@ impl App {
             if let Some(a) = &hit {
                 if matches!(a.kind, SegKind::Node(Kind::File)) {
                     let path = self.sessions[si].tree.read().unwrap().path(a.node);
-                    if self.sessions[si].source().is_local() {
-                        super::app::os_open(&path, false);
+                    if self.sessions[si].source().is_local() && super::app::os_open(&path, false) {
+                        self.toasts.push(tr("Programs and scripts are shown in the file manager, not run").into(), self.theme.accent);
                     }
                 }
             }
@@ -714,8 +725,8 @@ impl App {
                 (0, Kind::SmallFiles) => self.expand(si, node),
                 (1, Kind::File) => {
                     let path = s.tree.read().unwrap().path(node);
-                    if s.source().is_local() {
-                        super::app::os_open(&path, false);
+                    if s.source().is_local() && super::app::os_open(&path, false) {
+                        self.toasts.push(tr("Programs and scripts are shown in the file manager, not run").into(), self.theme.accent);
                     }
                 }
                 _ => {}
@@ -935,17 +946,21 @@ impl App {
                     self.sessions[si].navigate(View::node(node));
                     self.sfx(Sfx::Blip);
                 }
-                1 => super::app::os_open(&path, false),
-                2 => super::app::os_open(&path, true),
+                1 => {
+                    if super::app::os_open(&path, false) {
+                        self.toasts.push(tr("Programs and scripts are shown in the file manager, not run").into(), theme.accent);
+                    }
+                }
+                2 => {
+                    super::app::os_open(&path, true);
+                }
                 3 => {
                     ctx.copy_text(path);
                     self.toasts.push(tr("Path copied").into(), theme.accent);
                 }
-                4 => {
-                    if self.sessions[si].collect(node) {
-                        self.sfx(Sfx::Plop);
-                        self.bin_bounce = 1.0;
-                    }
+                4 if self.sessions[si].collect(node) => {
+                    self.sfx(Sfx::Plop);
+                    self.bin_bounce = 1.0;
                 }
                 _ => {}
             }
@@ -965,7 +980,7 @@ impl App {
 /// CPU fallback when OpenGL shaders are unavailable.
 fn cpu_mesh(painter: &egui::Painter, verts: &[f32], idx: &[u32]) {
     let mut mesh = egui::Mesh::default();
-    for v in verts.chunks_exact(sunburst::VERT_FLOATS) {
+    for v in verts.as_chunks::<{ sunburst::VERT_FLOATS }>().0 {
         let a = v[5];
         let shade = 1.0;
         let c = Color32::from_rgba_premultiplied(

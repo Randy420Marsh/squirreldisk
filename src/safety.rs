@@ -161,10 +161,8 @@ impl Rules {
         if depth == 0 || (self.os == Os::Windows && p.len() <= 3) {
             return Verdict::Forbidden("this is the root of a disk".into());
         }
-        if self.os != Os::Windows {
-            if (p.starts_with("/Volumes/") && depth == 2) || (p.starts_with("/mnt/") && depth == 2) || (p.starts_with("/media/") && depth <= 3) {
-                return Verdict::Forbidden("this is a mounted volume".into());
-            }
+        if self.os != Os::Windows && ((p.starts_with("/Volumes/") && depth == 2) || (p.starts_with("/mnt/") && depth == 2) || (p.starts_with("/media/") && depth <= 3)) {
+            return Verdict::Forbidden("this is a mounted volume".into());
         }
         for f in &self.forbidden_trees {
             if is_under(&p, f) || contains(&p, f) {
