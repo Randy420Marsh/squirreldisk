@@ -8,8 +8,20 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
+thread_local! {
+    // tests turn the demo on for their own thread only: the environment is
+    // shared by every test running in parallel
+    static FORCE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 pub fn enabled() -> bool {
-    std::env::var_os("MARKETING_DEMO").is_some()
+    FORCE.with(|f| f.get()) || std::env::var_os("MARKETING_DEMO").is_some()
+}
+
+/// Made-up disks and scans on this thread (tests).
+#[cfg(test)]
+pub fn force_on_this_thread() {
+    FORCE.with(|f| f.set(true));
 }
 
 const GB: u64 = 1_000_000_000;

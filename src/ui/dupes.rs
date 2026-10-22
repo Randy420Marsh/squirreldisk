@@ -90,6 +90,8 @@ pub struct DupesUi {
     pub add_menu: Option<Pos2>,
     /// The menu of the remove button is open.
     pub trash_menu: bool,
+    /// one column (a narrow window): the preview replaces the list
+    single: bool,
     /// When each group showed up in the list (for its entrance).
     appeared: HashMap<u32, f64>,
     thumbs: Thumbs,
@@ -150,6 +152,7 @@ impl DupesUi {
             draft_focus: false,
             add_menu: None,
             trash_menu: false,
+            single: false,
             appeared: HashMap::new(),
             thumbs: Thumbs::default(),
             meta: Default::default(),
@@ -708,6 +711,7 @@ impl App {
             Some(d) if d.add_menu.is_some() => d.add_menu = None,
             Some(d) if d.trash_menu => d.trash_menu = false,
             Some(d) if d.rule_draft.is_some() => d.rule_draft = None,
+            Some(d) if d.single && d.selected.is_some() => d.selected = None,
             _ => self.screen = Screen::Home,
         }
     }
@@ -743,22 +747,49 @@ impl App {
         self.window_drag_area(ui, Rect::from_min_size(screen.min, Vec2::new(screen.width(), bar_h + 4.0)));
         self.dupes_top_bar(ui, bar);
 
-        let body = Rect::from_min_max(Pos2::new(screen.left() + 16.0, bar.bottom() + 6.0), Pos2::new(screen.right() - 16.0, screen.bottom() - 16.0));
+        let pad = if screen.width() < 480.0 { 10.0 } else { 16.0 };
+        let body = Rect::from_min_max(Pos2::new(screen.left() + pad, bar.bottom() + 6.0), Pos2::new(screen.right() - pad, screen.bottom() - pad));
+        // too narrow for the list and the preview side by side: one at a time
         let panel_w = (body.width() * 0.34).clamp(300.0, 420.0);
+        d.single = body.width() - panel_w - 16.0 < 560.0;
+        if d.single && d.selected.is_some() {
+            let back = Rect::from_min_size(body.min, Vec2::new(body.width().min(120.0), 30.0));
+            if widgets::button(ui, back, Id::new("dupes-preview-back"), tr("Back"), Some(Icon::Back), BtnStyle::Ghost, &theme).clicked() {
+                d.selected = None;
+                self.sfx(Sfx::BlipDown);
+            }
+            let panel = Rect::from_min_max(Pos2::new(body.left(), back.bottom() + 8.0), body.max);
+            dupes_preview(ui, panel, &mut d, &theme, &mut self.toasts);
+            self.dupes = Some(d);
+            return;
+        }
         let panel = Rect::from_min_max(Pos2::new(body.right() - panel_w, body.top()), body.max);
-        let left = Rect::from_min_max(body.min, Pos2::new(panel.left() - 16.0, body.bottom()));
+        let left = if d.single { body } else { Rect::from_min_max(body.min, Pos2::new(panel.left() - 16.0, body.bottom())) };
+        // short windows: tighter gaps
+        let gap = if body.height() < 420.0 { 8.0 } else { 12.0 };
 
-        let places = Rect::from_min_size(left.min, Vec2::new(left.width(), 108.0));
+        let places = Rect::from_min_size(left.min, Vec2::new(left.width(), if places_stacked(left.width()) { 152.0 } else { 108.0 }));
         self.dupes_places(ui, places, &mut d);
-        let tools = Rect::from_min_size(Pos2::new(left.left(), places.bottom() + 14.0), Vec2::new(left.width(), 34.0));
-        dupes_toolbar(ui, tools, &mut d, &theme);
-        let rules_top = tools.bottom() + 10.0;
-        let rules_h = dupes_rules(ui, Rect::from_min_size(Pos2::new(left.left(), rules_top), Vec2::new(left.width(), 30.0)), &mut d, &theme);
-        let actions = Rect::from_min_max(Pos2::new(left.left(), left.bottom() - 58.0), left.max);
-        let list = Rect::from_min_max(Pos2::new(left.left(), rules_top + rules_h + 10.0), Pos2::new(left.right(), actions.top() - 10.0));
-        self.dupes_list(ui, list, &mut d);
+        let tools_top = places.bottom() + gap;
+        let tools_h = dupes_toolbar(ui, Rect::from_min_size(Pos2::new(left.left(), tools_top), Vec2::new(left.width(), 34.0)), &mut d, &theme);
+        let rules_top = tools_top + tools_h + gap * 0.8;
+        let actions_h = if actions_stacked(left.width()) { 96.0 } else { 58.0 };
+        let actions = Rect::from_min_max(Pos2::new(left.left(), left.bottom() - actions_h), left.max);
+        // a phone on its side: the list matters more than the rules, which
+        // still apply while they are out of sight
+        let list_top = if actions.top() - rules_top - 72.0 < 120.0 {
+            rules_top
+        } else {
+            rules_top + dupes_rules(ui, Rect::from_min_size(Pos2::new(left.left(), rules_top), Vec2::new(left.width(), 30.0)), &mut d, &theme) + gap * 0.8
+        };
+        let list = Rect::from_min_max(Pos2::new(left.left(), list_top), Pos2::new(left.right(), actions.top() - gap * 0.8));
+        if list.height() > 20.0 {
+            self.dupes_list(ui, list, &mut d);
+        }
         self.dupes_actions(ui, actions, &mut d);
-        dupes_preview(ui, panel, &mut d, &theme, &mut self.toasts);
+        if !d.single {
+            dupes_preview(ui, panel, &mut d, &theme, &mut self.toasts);
+        }
         self.dupes_add_menu(ui, &mut d);
         self.dupes = Some(d);
     }
@@ -801,17 +832,31 @@ impl App {
         let theme = self.theme.clone();
         card(ui.painter(), r, &theme);
         let inner = r.shrink2(Vec2::new(18.0, 14.0));
+        // narrow: the space to win back goes on a row of its own at the bottom
+        let stacked = places_stacked(r.width());
         let right_w = 190.0;
-        let left = Rect::from_min_max(inner.min, Pos2::new(inner.right() - right_w - 24.0, inner.bottom()));
+        let left = if stacked { Rect::from_min_size(inner.min, Vec2::new(inner.width(), 80.0)) } else { Rect::from_min_max(inner.min, Pos2::new(inner.right() - right_w - 24.0, inner.bottom())) };
 
         // space to win back
         let (freed, extra) = (d.view().freed, d.view().extra);
         let p = ui.painter();
-        p.text(Pos2::new(inner.right(), inner.top() + 2.0), Align2::RIGHT_TOP, tr("CAN BE FREED"), bold(11.0), theme.text_faint);
         let shown = ui.ctx().animate_value_with_time(Id::new("dupes-freed"), freed as f32, 0.35);
-        p.text(Pos2::new(inner.right(), inner.top() + 18.0), Align2::RIGHT_TOP, fmt_size(shown as u64), display(30.0), theme.text);
-        p.text(Pos2::new(inner.right(), inner.top() + 58.0), Align2::RIGHT_TOP, trf("of {size} in extra copies", &[("size", &fmt_size(extra))]), font(12.0), theme.text_dim);
-        p.line_segment([Pos2::new(left.right() + 12.0, inner.top() + 2.0), Pos2::new(left.right() + 12.0, inner.bottom() - 2.0)], Stroke::new(1.0, with_alpha(theme.stroke, 0.6)));
+        let of_extra = trf("of {size} in extra copies", &[("size", &fmt_size(extra))]);
+        if stacked {
+            let y = left.bottom() + 12.0;
+            p.line_segment([Pos2::new(inner.left(), y - 6.0), Pos2::new(inner.right(), y - 6.0)], Stroke::new(1.0, with_alpha(theme.stroke, 0.6)));
+            let size = fmt_size(shown as u64);
+            let sw = p.layout_no_wrap(size.clone(), display(24.0), theme.text).size().x;
+            p.text(Pos2::new(inner.right(), (y + inner.bottom()) / 2.0), Align2::RIGHT_CENTER, size, display(24.0), theme.text);
+            let room = inner.width() - sw - 12.0;
+            p.text(Pos2::new(inner.left(), y + 2.0), Align2::LEFT_TOP, widgets::truncate(p, tr("CAN BE FREED"), &bold(11.0), room), bold(11.0), theme.text_faint);
+            p.text(Pos2::new(inner.left(), y + 19.0), Align2::LEFT_TOP, widgets::truncate(p, &of_extra, &font(12.0), room), font(12.0), theme.text_dim);
+        } else {
+            p.text(Pos2::new(inner.right(), inner.top() + 2.0), Align2::RIGHT_TOP, tr("CAN BE FREED"), bold(11.0), theme.text_faint);
+            p.text(Pos2::new(inner.right(), inner.top() + 18.0), Align2::RIGHT_TOP, fmt_size(shown as u64), display(30.0), theme.text);
+            p.text(Pos2::new(inner.right(), inner.top() + 58.0), Align2::RIGHT_TOP, of_extra, font(12.0), theme.text_dim);
+            p.line_segment([Pos2::new(left.right() + 12.0, inner.top() + 2.0), Pos2::new(left.right() + 12.0, inner.bottom() - 2.0)], Stroke::new(1.0, with_alpha(theme.stroke, 0.6)));
+        }
 
         // places
         p.text(left.left_top(), Align2::LEFT_TOP, tr("COMPARING"), bold(11.0), theme.text_faint);
@@ -1137,7 +1182,7 @@ impl App {
             } else {
                 tr("No duplicates found")
             };
-            lp.text(list.center() - Vec2::new(0.0, 20.0), Align2::CENTER_CENTER, msg, font(13.5), theme.text_dim);
+            lp.text(list.center() - Vec2::new(0.0, 20.0), Align2::CENTER_CENTER, widgets::truncate(&lp, msg, &font(13.5), list.width() - 8.0), font(13.5), theme.text_dim);
             return;
         }
         let top = list.top() - d.scroll;
@@ -1197,8 +1242,10 @@ impl App {
                     let freed = g.freed();
                     let size_txt = if freed > 0 { fmt_size(freed) } else { "—".into() };
                     let sw = lp.layout_no_wrap(size_txt.clone(), bold(13.0), theme.text).size().x.max(64.0);
-                    let warn_w = if g.none_kept() { 120.0 } else { 0.0 };
                     let tx = thumb.right() + 12.0;
+                    // "no copy kept" in words when there is room, else just the sign
+                    let warn_words = rr.right() - 16.0 - sw - 16.0 - 120.0 - tx > 100.0;
+                    let warn_w = if !g.none_kept() { 0.0 } else if warn_words { 120.0 } else { 24.0 };
                     let room = rr.right() - 16.0 - sw - 16.0 - warn_w - tx;
                     let name = widgets::truncate(&lp, &g.name, &bold(13.5), room);
                     lp.text(Pos2::new(tx, rr.center().y - 9.0), Align2::LEFT_CENTER, name, bold(13.5), with_alpha(theme.text, a));
@@ -1216,8 +1263,10 @@ impl App {
                     lp.text(Pos2::new(rr.right() - 16.0, rr.center().y + 10.0), Align2::RIGHT_CENTER, trf("{size} each", &[("size", &fmt_size(g.size))]), font(11.5), with_alpha(theme.text_faint, a));
                     if g.none_kept() {
                         let wx = rr.right() - 16.0 - sw - 16.0;
-                        lp.text(Pos2::new(wx, rr.center().y), Align2::RIGHT_CENTER, tr("no copy kept"), bold(11.5), theme.danger);
-                        widgets::draw_icon(&lp, Icon::Warning, Rect::from_center_size(Pos2::new(wx - 92.0, rr.center().y), Vec2::splat(13.0)), theme.danger);
+                        if warn_words {
+                            lp.text(Pos2::new(wx, rr.center().y), Align2::RIGHT_CENTER, tr("no copy kept"), bold(11.5), theme.danger);
+                        }
+                        widgets::draw_icon(&lp, Icon::Warning, Rect::from_center_size(Pos2::new(if warn_words { wx - 92.0 } else { wx - 8.0 }, rr.center().y), Vec2::splat(13.0)), theme.danger);
                     }
                     if cb_resp.clicked() {
                         click = Some((*l, 1));
@@ -1266,14 +1315,19 @@ impl App {
                     x += 22.0;
                     let date = fmt_date(c.modified);
                     let dw = lp.layout_no_wrap(date.clone(), font(11.5), theme.text).size().x;
+                    // the date only when the path still gets some room
+                    let show_date = rr.right() - 16.0 - dw - 20.0 - x > 90.0;
+                    let room = if show_date { rr.right() - 16.0 - dw - 20.0 - x } else { rr.right() - 12.0 - x };
                     let shown = DupesUi::shown(c, &g.name);
-                    let path = truncate_middle(&lp, &shown, &font(12.5), rr.right() - 16.0 - dw - 20.0 - x);
+                    let path = truncate_middle(&lp, &shown, &font(12.5), room);
                     if resp.hovered() {
                         resp.clone().on_hover_text(&c.path);
                     }
                     let tc = if c.marked { theme.text_dim } else { theme.text };
                     lp.text(Pos2::new(x, rr.center().y), Align2::LEFT_CENTER, path, font(12.5), tc);
-                    lp.text(Pos2::new(rr.right() - 14.0, rr.center().y), Align2::RIGHT_CENTER, date, font(11.5), theme.text_faint);
+                    if show_date {
+                        lp.text(Pos2::new(rr.right() - 14.0, rr.center().y), Align2::RIGHT_CENTER, date, font(11.5), theme.text_faint);
+                    }
                     if cb_resp.clicked() {
                         click = Some((*l, 1));
                     } else if resp.clicked() {
@@ -1333,21 +1387,26 @@ impl App {
         let (n, bytes, unsafe_groups) = (v.marked, v.freed, v.unsafe_groups);
         let p = ui.painter();
         let x = r.left() + 20.0;
+        // narrow: the words above, the button below
+        let stacked = actions_stacked(r.width());
+        let (text_y, button_y) = if stacked { (r.top() + 26.0, r.bottom() - 14.0 - 17.0) } else { (r.center().y, r.center().y) };
+        let trash = Rect::from_min_size(Pos2::new(r.right() - 14.0 - 206.0, button_y - 17.0), Vec2::new(206.0, 34.0));
+        let wide = r.width() > 620.0;
+        let room = if stacked { r.right() - 14.0 - x } else if wide { trash.left() - 10.0 - 84.0 - 8.0 - 136.0 - 12.0 - x } else { trash.left() - 12.0 - x };
         if n == 0 {
-            p.text(Pos2::new(x, r.center().y), Align2::LEFT_CENTER, tr("Check the copies you want to remove"), font(13.0), theme.text_dim);
+            p.text(Pos2::new(x, text_y), Align2::LEFT_CENTER, widgets::truncate(p, tr("Check the copies you want to remove"), &font(13.0), room), font(13.0), theme.text_dim);
         } else {
-            p.text(Pos2::new(x, r.center().y - 9.0), Align2::LEFT_CENTER, trf("{n} copies selected", &[("n", &fmt_count(n as u64))]), bold(13.5), theme.text);
+            p.text(Pos2::new(x, text_y - 9.0), Align2::LEFT_CENTER, widgets::truncate(p, &trf("{n} copies selected", &[("n", &fmt_count(n as u64))]), &bold(13.5), room), bold(13.5), theme.text);
             let sub = if unsafe_groups > 0 {
                 (trf("{n} files would lose every copy", &[("n", &unsafe_groups)]), theme.danger)
             } else {
                 (trf("{size} will be freed", &[("size", &fmt_size(bytes))]), theme.text_dim)
             };
-            p.text(Pos2::new(x, r.center().y + 10.0), Align2::LEFT_CENTER, sub.0, font(12.0), sub.1);
+            p.text(Pos2::new(x, text_y + 10.0), Align2::LEFT_CENTER, widgets::truncate(p, &sub.0, &font(12.0), room), font(12.0), sub.1);
         }
-        let trash = Rect::from_min_size(Pos2::new(r.right() - 14.0 - 206.0, r.center().y - 17.0), Vec2::new(206.0, 34.0));
         let clear = Rect::from_min_size(Pos2::new(trash.left() - 10.0 - 84.0, trash.top()), Vec2::new(84.0, 34.0));
         let auto = Rect::from_min_size(Pos2::new(clear.left() - 8.0 - 136.0, trash.top()), Vec2::new(136.0, 34.0));
-        if r.width() > 620.0 {
+        if wide {
             if widgets::button(ui, auto, Id::new("dupes-auto"), tr("Auto-select"), Some(Icon::Bolt), BtnStyle::Ghost, &theme).clicked() {
                 for g in d.groups.iter_mut() {
                     g.manual = false;
@@ -1427,9 +1486,26 @@ impl App {
     }
 }
 
-fn dupes_toolbar(ui: &mut Ui, r: Rect, d: &mut DupesUi, theme: &Theme) {
+/// Search, filter and sort. Returns the height used: two rows when narrow.
+fn dupes_toolbar(ui: &mut Ui, r: Rect, d: &mut DupesUi, theme: &Theme) -> f32 {
+    let segs = [(Filter::All, tr("All")), (Filter::Photos, tr("Photos")), (Filter::Videos, tr("Videos")), (Filter::Other, tr("Other"))];
+    let n = d.view().counts;
+    let counts = |f: Filter| n[segs.iter().position(|s| s.0 == f).unwrap_or(0)];
+    let p = ui.painter().clone();
+    let seg_widths = |with_counts: bool| -> Vec<f32> {
+        segs.iter()
+            .map(|(f, l)| p.layout_no_wrap(l.to_string(), bold(12.5), Color32::WHITE).size().x + if with_counts { p.layout_no_wrap(counts(*f).to_string(), font(11.5), Color32::WHITE).size().x + 30.0 } else { 20.0 })
+            .collect()
+    };
+    let mut widths = seg_widths(true);
+    let total_of = |w: &[f32]| w.iter().sum::<f32>() + 6.0;
+    let two_rows = 180.0 + 12.0 + total_of(&widths) > r.width();
+    if two_rows && total_of(&widths) > r.width() {
+        widths = seg_widths(false);
+    }
+    let with_counts = !two_rows || total_of(&seg_widths(true)) <= r.width();
     // search
-    let sw = (r.width() * 0.36).clamp(180.0, 300.0);
+    let sw = if two_rows { r.width() } else { (r.width() * 0.36).clamp(180.0, 300.0) };
     let field = Rect::from_min_size(r.min, Vec2::new(sw, r.height()));
     let id = Id::new("dupes-search");
     let focused = ui.memory(|m| m.has_focus(id));
@@ -1460,16 +1536,9 @@ fn dupes_toolbar(ui: &mut Ui, r: Rect, d: &mut DupesUi, theme: &Theme) {
     }
 
     // filter
-    let segs = [(Filter::All, tr("All")), (Filter::Photos, tr("Photos")), (Filter::Videos, tr("Videos")), (Filter::Other, tr("Other"))];
-    let n = d.view().counts;
-    let counts = |f: Filter| n[segs.iter().position(|s| s.0 == f).unwrap_or(0)];
-    let p = ui.painter().clone();
-    let widths: Vec<f32> = segs
-        .iter()
-        .map(|(f, l)| p.layout_no_wrap(l.to_string(), bold(12.5), Color32::WHITE).size().x + p.layout_no_wrap(counts(*f).to_string(), font(11.5), Color32::WHITE).size().x + 30.0)
-        .collect();
-    let total: f32 = widths.iter().sum::<f32>() + 6.0;
-    let seg_rect = Rect::from_min_size(Pos2::new(field.right() + 12.0, r.top()), Vec2::new(total, r.height()));
+    let total = total_of(&widths);
+    let row = if two_rows { r.translate(Vec2::new(0.0, r.height() + 8.0)) } else { r };
+    let seg_rect = Rect::from_min_size(Pos2::new(if two_rows { r.left() } else { field.right() + 12.0 }, row.top()), Vec2::new(total, r.height()));
     p.rect_filled(seg_rect, cr(8.0), with_alpha(theme.bg_bottom, 0.55));
     p.rect_stroke(seg_rect, cr(8.0), Stroke::new(1.0, with_alpha(theme.stroke, 0.9)), egui::StrokeKind::Inside);
     let mut x = seg_rect.left() + 3.0;
@@ -1483,7 +1552,9 @@ fn dupes_toolbar(ui: &mut Ui, r: Rect, d: &mut DupesUi, theme: &Theme) {
         let lc = lerp_color(theme.text_dim, theme.text, on.max(h));
         let lw = p.layout_no_wrap(label.to_string(), bold(12.5), lc).size().x;
         p.text(Pos2::new(rr.left() + 10.0, rr.center().y), Align2::LEFT_CENTER, *label, bold(12.5), lc);
-        p.text(Pos2::new(rr.left() + 16.0 + lw, rr.center().y), Align2::LEFT_CENTER, counts(*f).to_string(), font(11.5), lerp_color(theme.text_faint, theme.accent, on));
+        if with_counts {
+            p.text(Pos2::new(rr.left() + 16.0 + lw, rr.center().y), Align2::LEFT_CENTER, counts(*f).to_string(), font(11.5), lerp_color(theme.text_faint, theme.accent, on));
+        }
         if resp.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
@@ -1501,7 +1572,7 @@ fn dupes_toolbar(ui: &mut Ui, r: Rect, d: &mut DupesUi, theme: &Theme) {
         Sort::Name => tr("By name"),
     };
     let lw = p.layout_no_wrap(label.to_string(), bold(12.5), Color32::WHITE).size().x;
-    let sr = Rect::from_min_size(Pos2::new(r.right() - lw - 40.0, r.top()), Vec2::new(lw + 40.0, r.height()));
+    let sr = Rect::from_min_size(Pos2::new(row.right() - lw - 40.0, row.top()), Vec2::new(lw + 40.0, r.height()));
     if sr.left() > seg_rect.right() + 8.0 {
         let sid = Id::new("dupes-sort");
         let resp = ui.interact(sr, sid, Sense::click());
@@ -1520,6 +1591,7 @@ fn dupes_toolbar(ui: &mut Ui, r: Rect, d: &mut DupesUi, theme: &Theme) {
             };
         }
     }
+    row.bottom() - r.top()
 }
 
 /// The "always keep" rules, as chips that wrap. Returns the height used.
@@ -1537,10 +1609,12 @@ fn dupes_rules(ui: &mut Ui, r: Rect, d: &mut DupesUi, theme: &Theme) -> f32 {
     let otherwise = tr("Otherwise keep");
     let ow = p.layout_no_wrap(otherwise.to_string(), font(12.0), Color32::WHITE).size().x;
     let pw = p.layout_no_wrap(prefer_label.to_string(), bold(12.5), Color32::WHITE).size().x + 34.0;
-    let pref = Rect::from_min_size(Pos2::new(r.right() - pw, r.top()), Vec2::new(pw, chip_h));
-    let right_limit = pref.left() - ow - 20.0;
-
     let start_x = r.left() + 22.0 + p.layout_no_wrap(tr("Always keep").to_string(), bold(12.5), Color32::WHITE).size().x + 12.0;
+    // room for a whole rule chip beside "Otherwise keep", or it goes below
+    let own_row = r.right() - pw - ow - 20.0 - start_x < 300.0;
+    let mut pref = Rect::from_min_size(Pos2::new(r.right() - pw, r.top()), Vec2::new(pw, chip_h));
+    let right_limit = if own_row { r.right() } else { pref.left() - ow - 20.0 };
+    let chip_room = (r.right() - start_x - 56.0).min(240.0);
     let (mut x, mut y) = (start_x, r.top());
     let mut toggle = None;
     let mut remove = None;
@@ -1555,7 +1629,7 @@ fn dupes_rules(ui: &mut Ui, r: Rect, d: &mut DupesUi, theme: &Theme) -> f32 {
         rr
     };
     for (k, rule) in d.rules.iter().enumerate() {
-        let txt = widgets::truncate(&p, &rule.pattern, &font(12.5), 240.0);
+        let txt = widgets::truncate(&p, &rule.pattern, &font(12.5), chip_room);
         let tw = p.layout_no_wrap(txt.clone(), font(12.5), Color32::WHITE).size().x;
         let rr = place(&mut x, &mut y, tw + 56.0);
         let id = Id::new(("dupes-rule", k));
@@ -1587,7 +1661,7 @@ fn dupes_rules(ui: &mut Ui, r: Rect, d: &mut DupesUi, theme: &Theme) -> f32 {
     }
     // new rule
     if let Some(mut draft) = d.rule_draft.take() {
-        let rr = place(&mut x, &mut y, 300.0);
+        let rr = place(&mut x, &mut y, (r.right() - start_x).min(300.0));
         let id = Id::new("dupes-rule-draft");
         let resp = widgets::text_input(ui, rr, id, &mut draft, tr("**/Archive/**  or  ~/Pictures"), theme);
         if d.draft_focus {
@@ -1631,6 +1705,12 @@ fn dupes_rules(ui: &mut Ui, r: Rect, d: &mut DupesUi, theme: &Theme) -> f32 {
     }
 
     // otherwise: which copy wins
+    if own_row {
+        y += chip_h + 6.0;
+        let x = (r.left() + 22.0 + ow + 8.0).min(r.right() - pw);
+        pref = Rect::from_min_size(Pos2::new(x, y), Vec2::new(pw.min(r.right() - x), chip_h));
+    }
+    let otherwise = widgets::truncate(&p, otherwise, &font(12.0), pref.left() - 8.0 - r.left());
     p.text(Pos2::new(pref.left() - 8.0, pref.center().y), Align2::RIGHT_CENTER, otherwise, font(12.0), theme.text_faint);
     let id = Id::new("dupes-prefer");
     let resp = ui.interact(pref, id, Sense::click());
@@ -1859,6 +1939,16 @@ fn dupes_preview(ui: &mut Ui, panel: Rect, d: &mut DupesUi, theme: &Theme, toast
         d.expanded.insert(gid);
         d.reveal = true;
     }
+}
+
+/// The places card puts the space to win back below the places.
+fn places_stacked(w: f32) -> bool {
+    w < 510.0
+}
+
+/// The bottom bar puts its words above the button.
+fn actions_stacked(w: f32) -> bool {
+    w < 540.0
 }
 
 // ---------------------------------------------------------------------------

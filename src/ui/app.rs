@@ -457,24 +457,6 @@ impl App {
         if let Ok(style) = std::env::var("SQUIRRELDISK_CHART") {
             settings.chart_style = style;
         }
-        let lang = crate::i18n::resolve(&std::env::var("SQUIRRELDISK_LANG").unwrap_or_else(|_| settings.language.clone()));
-        crate::i18n::set_language(lang);
-        install_fonts(&cc.egui_ctx, lang, false);
-        // Ctrl +/−/0 drive `ui_scale` instead (see `auto_scale`)
-        cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
-        let theme = theme::by_name(&settings.theme);
-        let (gl, gl_error) = match cc.gl.as_ref().map(|gl| SunburstGl::new(gl)) {
-            Some(Ok(r)) => (Some(Arc::new(Mutex::new(r))), None),
-            Some(Err(e)) => (None, Some(e)),
-            None => (None, Some("no OpenGL context".into())),
-        };
-        if let Some(e) = &gl_error {
-            eprintln!("SquirrelDisk: falling back to CPU rendering: {e}");
-        }
-        let rclone = Arc::new(Mutex::new(RcloneState::Looking));
-        refresh_rclone(&rclone, &cc.egui_ctx);
-        // No-network build: never asks for updates.
-        let updater = Updater::new();
         // system hooks: keep the folder menu pointing at this copy of the
         // app, and set up the `squirreldisk` command once
         if !scan::demo::enabled() {
@@ -487,25 +469,49 @@ impl App {
                 super::integration::install_cli_first_launch();
             }
         }
+        let mut app = App::bare(&cc.egui_ctx, settings, cc.gl.as_deref());
+        refresh_rclone(&app.rclone, &cc.egui_ctx);
+        app.ssh_hosts = scan::remote::ssh_config_hosts();
+        app.sounds = Some(Sounds::new());
         // `squirreldisk scan` asks this window before it scans by itself
         // (never the made-up disks of the demo)
         #[cfg(unix)]
-        let scans = Arc::new(Mutex::new(crate::ipc::Scans::default()));
-        #[cfg(unix)]
         if let Some(socket) = crate::ipc::socket_path().filter(|_| !scan::demo::enabled()) {
-            let s = scans.clone();
+            let s = app.scans.clone();
             let _ = crate::ipc::serve(socket, move |request| crate::cli::answer(&s, request));
+        }
+        app
+    }
+
+    /// The app without anything that reaches outside the window: no sounds,
+    /// no rclone or ssh config lookup, no system hooks or socket (and so
+    /// usable headless, in tests).
+    pub fn bare(ctx: &egui::Context, settings: Settings, gl: Option<&eframe::glow::Context>) -> Self {
+        let lang = crate::i18n::resolve(&std::env::var("SQUIRRELDISK_LANG").unwrap_or_else(|_| settings.language.clone()));
+        crate::i18n::set_language(lang);
+        install_fonts(ctx, lang, false);
+        // Ctrl +/−/0 drive `ui_scale` instead (see `auto_scale`)
+        ctx.options_mut(|o| o.zoom_with_keyboard = false);
+        let theme = theme::by_name(&settings.theme);
+        let (gl, gl_error) = match gl.map(SunburstGl::new) {
+            Some(Ok(r)) => (Some(Arc::new(Mutex::new(r))), None),
+            Some(Err(e)) => (None, Some(e)),
+            None => (None, Some("no OpenGL context".into())),
+        };
+        if let Some(e) = gl_error.as_ref().filter(|_| !cfg!(test)) {
+            eprintln!("SquirrelDisk: falling back to CPU rendering: {e}");
         }
         App {
             themes: theme::all(),
             theme,
-            sounds: Some(Sounds::new()),
+            sounds: None,
             gl,
             screen: Screen::Home,
             sessions: Vec::new(),
             volumes: disks::list(),
             volumes_at: Instant::now(),
-            updater,
+            // No-network build: never asks for updates.
+            updater: Updater::new(),
             modal: None,
             modal_opened: Instant::now(),
             toasts: Toasts::default(),
@@ -514,8 +520,8 @@ impl App {
             time: 0.0,
             dt: 0.016,
             last_frame: Instant::now(),
-            rclone,
-            ssh_hosts: scan::remote::ssh_config_hosts(),
+            rclone: Arc::new(Mutex::new(RcloneState::Looking)),
+            ssh_hosts: Vec::new(),
             ctx_menu: None,
             bin_rect: Rect::NOTHING,
             bin_open: false,
@@ -541,7 +547,7 @@ impl App {
             font_scripts: 0,
             chrome: if cfg!(target_os = "macos") { (15.0, 68.0) } else { (22.0, 0.0) },
             #[cfg(unix)]
-            scans,
+            scans: Default::default(),
             dupes: None,
             settings,
         }
@@ -953,19 +959,13 @@ fn apply_fs_changes(tree: &SharedTree, paths: Vec<PathBuf>) {
     }
 }
 
-impl eframe::App for App {
-    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+impl App {
+    /// One frame of the whole interface, after the window is placed (what
+    /// the layout tests drive, without a window).
+    pub fn frame_ui(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
-        #[cfg(target_os = "macos")]
-        match super::macos::traffic_lights(frame) {
-            Some(Some(c)) => self.chrome = c,
-            // full screen: same bar, starting at the window's edge
-            Some(None) => self.chrome.1 = 0.0,
-            None => {}
-        }
-        let _ = &frame;
-        self.place_window(&ctx, frame);
         self.auto_scale(&ctx);
+
         if let Some(folder) = self.open_at_start.take() {
             let mount = folder.to_string_lossy();
             match self.volumes.iter().find(|v| v.mount == mount).cloned() {
@@ -1070,6 +1070,22 @@ impl eframe::App for App {
         } else {
             ctx.request_repaint_after(Duration::from_millis(500));
         }
+    }
+}
+
+impl eframe::App for App {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
+        #[cfg(target_os = "macos")]
+        match super::macos::traffic_lights(frame) {
+            Some(Some(c)) => self.chrome = c,
+            // full screen: same bar, starting at the window's edge
+            Some(None) => self.chrome.1 = 0.0,
+            None => {}
+        }
+        let _ = &frame;
+        self.place_window(&ctx, frame);
+        self.frame_ui(ui);
     }
 
     fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
@@ -1226,6 +1242,10 @@ fn zoom_for(base: egui::Vec2, ui_scale: f32) -> f32 {
     let (short, long) = (base.x.min(base.y), base.x.max(base.y));
     fit.min(short / MIN_SHORT).min(long / MIN_LONG).max(0.5)
 }
+
+#[cfg(test)]
+#[path = "layout_tests.rs"]
+mod layout_tests;
 
 #[cfg(test)]
 mod tests {

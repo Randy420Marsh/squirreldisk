@@ -159,6 +159,36 @@ Files: `src/ui/placement.rs`, `src/ui/app.rs`, `src/main.rs`, `Cargo.toml`.
 Tests: `ui::placement::tests::work_area_is_cut_to_the_monitor`,
 `ui::placement::tests::window_fits_the_screen`.
 
+### The delete dialog ran into its buttons on short windows
+
+**Bug.** The delete dialog had a fixed height. Its four mode cards were two
+by two even on a phone held upright. On a short window (a landscape phone,
+the Pi at 800x480) the caution checkbox and the hints were drawn over the
+Cancel and Delete buttons, and could not be scrolled to.
+
+**Fix.** Below 400 points of card width the modes go one under the other.
+The part between the title and the buttons is a clipped area that scrolls
+with the wheel or a finger. Long titles and subtitles of every dialog are
+truncated to the card.
+File: `src/ui/modals.rs`.
+Test: `ui::app::layout_tests::every_screen_fits_landscape_and_portrait`.
+
+### The duplicate finder overlapped on narrow and short windows
+
+**Bug.** The duplicate finder always put the preview panel beside the list,
+and every row assumed a wide window. Below about 900 points the places
+card, the search and filter row, the keep rules and the selection bar ran
+over each other, and on a landscape phone the list had no height left at
+all.
+
+**Fix.** Narrow windows get one column. The preview opens in place of the
+list with a Back button, and Esc goes back too. The places card, the
+toolbar, the rules and the selection bar each have a stacked arrangement,
+texts are truncated, and on very short windows the rules row is left out
+so the list keeps its room.
+File: `src/ui/dupes.rs`.
+Test: `ui::app::layout_tests::every_screen_fits_landscape_and_portrait`.
+
 ### The window couldn't be made small or turned to portrait
 
 **Bug.** The minimum window size was 640x400 points, which is bigger than a

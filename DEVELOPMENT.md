@@ -55,6 +55,14 @@ HyperPixel 4.0 (800x480 / 480x800) and old 640x480 CRTs.
 the long side at least `MIN_LONG` points. The minimum window size is
 320x320.
 
+### Layout tests
+
+`cargo test --release layout` runs `src/ui/layout_tests.rs`. It draws
+every screen and dialog with the demo data at each size in `SIZES`, both
+ways up, and lists every text that runs out of its box or over another
+text. Add a `Scene` when you add a screen or dialog. When it fails, take a
+screenshot at that size (below) to see what it means.
+
 ### Developer hooks
 
 `src/ui/debug.rs` lists the `SQD_*` environment variables. The most useful
@@ -112,12 +120,12 @@ Done, release 2.6.2:
   the settings.
 - X11 window placement.
 
-In progress:
-- Automated **landscape and portrait layout tests** that run headless on
-  every CI platform. They drive `App` frames through `egui::Context` and
-  check that no text leaves the screen or overlaps other text.
-- **Narrow layouts** for the duplicate finder and the delete dialog, which
-  still overlap below about 640 points wide.
+- Landscape and portrait layout tests
+  (`src/ui/layout_tests.rs`). They run the real `App` headless through
+  `egui::Context`, for every screen and dialog at phone, Pi, CRT, laptop
+  and 1080p sizes both ways up. They fail if any text leaves its box or the
+  window, or overlaps other text. They are part of `cargo test`.
+- Narrow and short layouts for the duplicate finder and the delete dialog.
 
 Planned:
 - CI workflow matrix: Ubuntu 24.04/26.04 x86_64 and arm64, macOS,

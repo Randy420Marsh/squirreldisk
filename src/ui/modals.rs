@@ -53,8 +53,11 @@ pub(super) fn modal_frame(ctx: &egui::Context, opened: Instant, size: Vec2, them
 
 pub(super) fn title(ui: &Ui, card: Rect, text: &str, sub: Option<&str>, theme: &Theme) {
     let p = ui.painter();
+    // the title stops at the close button; the line under it may pass it
+    let text = widgets::truncate(p, text, &display(19.0), card.width() - 28.0 - 52.0);
     p.text(card.left_top() + Vec2::new(28.0, 26.0), Align2::LEFT_TOP, text, display(19.0), theme.text);
     if let Some(s) = sub {
+        let s = widgets::truncate(p, s, &font(12.5), card.width() - 56.0);
         p.text(card.left_top() + Vec2::new(28.0, 58.0), Align2::LEFT_TOP, s, font(12.5), theme.text_dim);
     }
 }
@@ -702,6 +705,8 @@ impl App {
         let list_rows = items.len().min(5);
         let show_secure = mode == 1 && local;
         let height = 330.0 + list_rows as f32 * 44.0 + if caution { 36.0 } else { 0.0 } + if mode >= 2 { 52.0 } else { 0.0 } + if show_secure { 58.0 } else { 0.0 };
+        // the modes stack on a narrow window (see one_column below)
+        let height = height + if ctx.content_rect().width().min(640.0 + 32.0) - 32.0 - 56.0 < 400.0 { 2.0 * 62.0 } else { 0.0 };
         let bd = modal_frame(ctx, self.modal_opened, Vec2::new(640.0, height), &theme, |ui, card| {
             let n = ok_items.len();
             let t = if n == 1 { tr("Delete 1 item?").to_string() } else { trf("Delete {count} items?", &[("count", &n)]) };
@@ -709,10 +714,21 @@ impl App {
             close = close_button(ui, card, &theme);
             let x0 = card.left() + 28.0;
             let w = card.width() - 56.0;
-            let mut y = card.top() + 92.0;
+            // Scrollable middle on a short window: title and buttons stay put.
+            let body = Rect::from_min_max(Pos2::new(card.left(), card.top() + 84.0), Pos2::new(card.right(), card.bottom() - 70.0));
+            let scroll_id = Id::new("del-scroll");
+            let (mut scroll, content_h) = ui.ctx().data(|d| d.get_temp::<(f32, f32)>(scroll_id)).unwrap_or((0.0, 0.0));
+            if ui.rect_contains_pointer(body) {
+                scroll -= super::app::scroll_delta(ui);
+            }
+            scroll = scroll.clamp(0.0, (content_h - body.height()).max(0.0));
+            let mut mid = ui.new_child(egui::UiBuilder::new().max_rect(body));
+            mid.set_clip_rect(body.intersect(ui.clip_rect()));
+            let top = body.top() + 8.0 - scroll;
+            let mut y = top;
             for it in items.iter().take(5) {
                 let r = Rect::from_min_size(Pos2::new(x0, y), Vec2::new(w, 40.0));
-                let p = ui.painter();
+                let p = mid.painter();
                 let (icon, col, note) = match &it.verdict {
                     Verdict::Ok => (Icon::Check, theme.ok, None),
                     Verdict::Caution(why) => (Icon::Warning, theme.warn, Some(tr_reason(why))),
@@ -728,13 +744,14 @@ impl App {
                 y += 44.0;
             }
             if items.len() > 5 {
-                ui.painter().text(Pos2::new(x0 + 4.0, y), Align2::LEFT_TOP, trf("and {count} more…", &[("count", &(items.len() - 5))]), font(12.0), theme.text_faint);
+                mid.painter().text(Pos2::new(x0 + 4.0, y), Align2::LEFT_TOP, trf("and {count} more…", &[("count", &(items.len() - 5))]), font(12.0), theme.text_faint);
                 y += 20.0;
             }
             y += 8.0;
-            // modes
+            // modes: two by two, or one under the other on a narrow window
             let gap = 10.0;
-            let cw = (w - gap) / 2.0;
+            let one_column = w < 400.0;
+            let cw = if one_column { w } else { (w - gap) / 2.0 };
             let modes: [(&str, &str, Icon, bool); 4] = [
                 (tr("Move to Trash"), tr("Recoverable from the system trash"), Icon::Trash, local),
                 (tr("Delete permanently"), tr("Frees space now, no undo"), Icon::Bolt, true),
@@ -742,36 +759,39 @@ impl App {
                 (tr("Cloud backup, then delete"), if has_rclone { tr("Upload with rclone first") } else { tr("Needs rclone") }, Icon::Cloud, local && has_rclone),
             ];
             for (k, (tt, sub, icon, en)) in modes.iter().enumerate() {
-                let r = Rect::from_min_size(Pos2::new(x0 + (k % 2) as f32 * (cw + gap), y + (k / 2) as f32 * 62.0), Vec2::new(cw, 54.0));
+                let (col, row) = if one_column { (0, k) } else { (k % 2, k / 2) };
+                let r = Rect::from_min_size(Pos2::new(x0 + col as f32 * (cw + gap), y + row as f32 * 62.0), Vec2::new(cw, 54.0));
                 mark(format!("mode-{k}"), r);
-                if widgets::choice_card(ui, r, Id::new(("mode", k)), mode == k, tt, sub, *icon, &theme, *en).clicked() {
+                if widgets::choice_card(&mut mid, r, Id::new(("mode", k)), mode == k, tt, sub, *icon, &theme, *en).clicked() {
                     mode = k;
                 }
             }
-            y += 128.0;
+            y += if one_column { 4.0 * 62.0 } else { 128.0 };
             if mode == 2 {
                 let r = Rect::from_min_size(Pos2::new(x0, y), Vec2::new(w - 110.0, 38.0));
-                widgets::text_input(ui, r, Id::new("bk-folder"), &mut backup_folder, tr("Backup folder, e.g. /Volumes/External"), &theme);
+                widgets::text_input(&mut mid, r, Id::new("bk-folder"), &mut backup_folder, tr("Backup folder, e.g. /Volumes/External"), &theme);
                 let b = Rect::from_min_size(Pos2::new(x0 + w - 100.0, y + 2.0), Vec2::new(100.0, 34.0));
-                browse = widgets::button(ui, b, Id::new("bk-browse"), tr("Browse…"), Some(Icon::Folder), BtnStyle::Subtle, &theme).clicked();
+                browse = widgets::button(&mut mid, b, Id::new("bk-browse"), tr("Browse…"), Some(Icon::Folder), BtnStyle::Subtle, &theme).clicked();
                 y += 52.0;
             } else if mode == 3 {
                 let r = Rect::from_min_size(Pos2::new(x0, y), Vec2::new(w, 38.0));
-                widgets::text_input(ui, r, Id::new("bk-remote"), &mut backup_remote, "remote:bucket/backups", &theme);
+                widgets::text_input(&mut mid, r, Id::new("bk-remote"), &mut backup_remote, "remote:bucket/backups", &theme);
                 y += 52.0;
             }
             if show_secure {
                 let r = Rect::from_min_size(Pos2::new(x0, y), Vec2::new(w, 24.0));
                 mark("secure", r);
-                widgets::checkbox(ui, r, Id::new("secure"), &mut secure, tr("Secure erase: overwrite files before deleting them"), &theme);
+                widgets::checkbox(&mut mid, r, Id::new("secure"), &mut secure, tr("Secure erase: overwrite files before deleting them"), &theme);
                 let hint = tr("3 passes (DoD 5220.22-M). On SSDs and APFS some old data may survive: disk encryption protects it fully.");
-                wrapped(ui, Pos2::new(x0 + 28.0, y + 22.0), w - 28.0, hint, font(11.0), theme.text_faint);
+                wrapped(&mid, Pos2::new(x0 + 28.0, y + 22.0), w - 28.0, hint, font(11.0), theme.text_faint);
                 y += 58.0;
             }
             if caution {
                 let r = Rect::from_min_size(Pos2::new(x0, y), Vec2::new(w, 28.0));
-                widgets::checkbox(ui, r, Id::new("ack"), &mut ack, tr("I know some items are app or system data and want to delete them anyway"), &theme);
+                widgets::checkbox(&mut mid, r, Id::new("ack"), &mut ack, tr("I know some items are app or system data and want to delete them anyway"), &theme);
+                y += 36.0;
             }
+            ui.ctx().data_mut(|d| d.insert_temp(scroll_id, (scroll, y - top)));
             let backup_ok = match mode {
                 2 => !backup_folder.trim().is_empty() && std::path::Path::new(backup_folder.trim()).is_dir(),
                 3 => backup_remote.contains(':'),
