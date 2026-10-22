@@ -65,6 +65,9 @@ pub struct Settings {
     pub folder_menu: bool,
     /// The `squirreldisk` command was set up (or tried) at first launch.
     pub cli_offered: bool,
+    /// Interface size on top of the automatic, window-driven scale
+    /// (Ctrl + / Ctrl − / Ctrl 0).
+    pub ui_scale: f32,
 }
 
 impl Default for Settings {
@@ -84,6 +87,7 @@ impl Default for Settings {
             skipped_version: None,
             folder_menu: false,
             cli_offered: false,
+            ui_scale: 1.0,
         }
     }
 }

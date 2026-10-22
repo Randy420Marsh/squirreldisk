@@ -152,7 +152,7 @@ fn run_gui(folder: Option<std::path::PathBuf>) {
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("SquirrelDisk")
         .with_inner_size([1180.0, 760.0])
-        .with_min_inner_size([860.0, 560.0])
+        .with_min_inner_size([640.0, 400.0])
         .with_drag_and_drop(true)
         .with_icon(icon);
     // SQD_WINDOW=WxH (development: check layouts at a given size)

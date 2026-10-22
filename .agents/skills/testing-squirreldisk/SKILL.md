@@ -39,7 +39,7 @@ translation drops a `{placeholder}`. If you add UI strings, run it.
 | Variable | Effect |
 | --- | --- |
 | `SQD_SCAN=<path>` | start scanning at launch |
-| `SQD_SHOT=<prefix>` + `SQD_SHOT_AT=3,8` | save `<prefix>-<n>.bmp` at those seconds |
+| `SQD_SHOT=<prefix>` + `SQD_SHOT_AT=3,8` | save `<prefix>-<n>.bmp` at those seconds (PNG on macOS) |
 | `SQD_QUIT=1` | quit after the last shot |
 | `SQD_WINDOW=1180x760` | window size (also skips auto-placement) |
 | `SQD_ZOOM=2` | interface scale (see the UI scale note below) |
@@ -73,6 +73,9 @@ strace -f -qq -e trace=socket,connect,sendto,sendmsg,sendmmsg \
   -o /tmp/sqd.strace timeout 25 target/release/squirreldisk
 grep -oE 'socket\(AF_[A-Z0-9]+' /tmp/sqd.strace | sort | uniq -c
 grep -E 'AF_INET6?' /tmp/sqd.strace                                   # expect nothing
+
+# 4) no sponsor/telemetry text or upstream endpoints compiled in
+strings target/release/squirreldisk | grep -ciE 'sponsor|squirreldisk\.com|api\.github|downloads\.rclone'   # expect 0
 ```
 
 Also open Settings and check that it has no "Check for updates" button and
@@ -85,8 +88,11 @@ processes). That is allowed. Test them against your own host only.
 
 The interface scales with the window: drag the window bigger and every
 element grows. Ctrl + / Ctrl − / Ctrl 0 change the size on top of that, and
-the setting is saved as `ui_scale`. Check small windows (`SQD_WINDOW=700x450`)
-and large ones (`SQD_WINDOW=2400x1500`) for clipped text.
+the setting is saved as `ui_scale`. Up to about 1080×720 points the scale
+stays 1; bigger windows scale up (to 2.5×), and windows smaller than the
+860×560 layout shrink it to fit (the window minimum is 640×400). Check small
+windows (`SQD_WINDOW=700x450`) and large ones (`SQD_WINDOW=2400x1500`, capped
+by the screen) for clipped text.
 
 ## Byte units
 

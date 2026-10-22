@@ -8,8 +8,8 @@
 //! * `SQD_COLLECT=2`         collect the N biggest children of the root
 //! * `SQD_QUIT=1`            quit after the last screenshot
 //! * `SQD_FULLSCREEN=1`      go full screen at launch
-//! * `SQD_ZOOM=2`           draw everything twice as big (sharp screenshots
-//!   on a 1x display, with `SQD_WINDOW` twice the usual size)
+//! * `SQD_ZOOM=2`           interface scale (`ui_scale`, not saved): sharp
+//!   screenshots on a 1x display, with `SQD_WINDOW` twice the usual size
 //! * `SQD_SCREEN=dupes`      open the duplicate finder; `SQD_DUPES_PICK=1` shows
 //!   made-up results, opening the biggest set; `SQD_DUPES=<folder>,<folder>`
 //!   compares these, and `SQD_DUPES_SELECT=1` opens the biggest set once done
@@ -57,7 +57,7 @@ impl App {
         if !self.debug.started {
             self.debug.started = true;
             if let Some(z) = std::env::var("SQD_ZOOM").ok().and_then(|z| z.parse::<f32>().ok()) {
-                ctx.set_zoom_factor(z);
+                self.settings.ui_scale = z;
             }
             if std::env::var("SQD_SCREEN").as_deref() == Ok("dupes") {
                 if std::env::var_os("SQD_DUPES_PICK").is_some() {
@@ -163,8 +163,11 @@ impl App {
         for img in images {
             let path = format!("{prefix}-{}.bmp", self.debug.taken);
             let _ = write_bmp(&path, &img);
-            let _ = std::process::Command::new("sips").args(["-s", "format", "png", &path, "--out", &path.replace(".bmp", ".png")]).output();
-            let _ = std::fs::remove_file(&path);
+            // PNG on macOS; elsewhere keep the BMP
+            let png = std::process::Command::new("sips").args(["-s", "format", "png", &path, "--out", &path.replace(".bmp", ".png")]).output();
+            if png.is_ok_and(|o| o.status.success()) {
+                let _ = std::fs::remove_file(&path);
+            }
             self.debug.taken += 1;
             if self.debug.taken >= self.debug.shots.len() && std::env::var("SQD_QUIT").is_ok() {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);

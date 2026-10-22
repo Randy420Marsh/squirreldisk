@@ -458,6 +458,8 @@ impl App {
         let lang = crate::i18n::resolve(&std::env::var("SQUIRRELDISK_LANG").unwrap_or_else(|_| settings.language.clone()));
         crate::i18n::set_language(lang);
         install_fonts(&cc.egui_ctx, lang, false);
+        // Ctrl +/−/0 drive `ui_scale` instead (see `auto_scale`)
+        cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
         let theme = theme::by_name(&settings.theme);
         let (gl, gl_error) = match cc.gl.as_ref().map(|gl| SunburstGl::new(gl)) {
             Some(Ok(r)) => (Some(Arc::new(Mutex::new(r))), None),
@@ -635,6 +637,37 @@ impl App {
     /// Opens the window centred on the screen the user is working on and
     /// sized to it (see [`super::placement`]). The screen is only known once
     /// the window exists, hence here, on the first frames.
+    /// Scales the whole interface with the window: at the usual size and
+    /// below, one point stays one point; a bigger window draws everything
+    /// bigger, and a window smaller than the layout's minimum (860×560
+    /// points) shrinks it to fit. `ui_scale` multiplies the result.
+    fn auto_scale(&mut self, ctx: &egui::Context) {
+        use egui::gui_zoom::kb_shortcuts::{ZOOM_IN, ZOOM_IN_SECONDARY, ZOOM_OUT, ZOOM_RESET};
+        let step = ctx.input_mut(|i| {
+            if i.consume_shortcut(&ZOOM_RESET) {
+                Some(0.0)
+            } else if i.consume_shortcut(&ZOOM_IN) || i.consume_shortcut(&ZOOM_IN_SECONDARY) {
+                Some(0.1)
+            } else if i.consume_shortcut(&ZOOM_OUT) {
+                Some(-0.1)
+            } else {
+                None
+            }
+        });
+        if let Some(step) = step {
+            let s = if step == 0.0 { 1.0 } else { self.settings.ui_scale + step };
+            self.settings.ui_scale = ((s * 10.0).round() / 10.0).clamp(0.5, 2.0);
+            self.settings.save();
+        }
+        // window size in points at zoom 1
+        let base = ctx.content_rect().size() * ctx.zoom_factor();
+        let fit = (base.x / 1080.0).min(base.y / 720.0).clamp(1.0, 2.5) * self.settings.ui_scale.clamp(0.5, 2.0);
+        let z = fit.min(base.x / 860.0).min(base.y / 560.0).max(0.5);
+        if (z - ctx.zoom_factor()).abs() > 0.01 {
+            ctx.set_zoom_factor(z);
+        }
+    }
+
     fn place_window(&mut self, ctx: &egui::Context, frame: &eframe::Frame) {
         use super::placement::{fit, on_active_screen, Placed};
         if self.placing == u8::MAX {
@@ -908,6 +941,7 @@ impl eframe::App for App {
         }
         let _ = &frame;
         self.place_window(&ctx, frame);
+        self.auto_scale(&ctx);
         if let Some(folder) = self.open_at_start.take() {
             let mount = folder.to_string_lossy();
             match self.volumes.iter().find(|v| v.mount == mount).cloned() {
