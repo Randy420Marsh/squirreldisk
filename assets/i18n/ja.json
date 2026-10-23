@@ -370,5 +370,8 @@
   "empty for a guest": "ゲストなら空欄",
   "share": "共有",
   "{size} free after": "空き容量 {size}",
-  "{size} to free": "{size} 解放"
+  "{size} to free": "{size} 解放",
+  "Licenses": "ライセンス",
+  "Open-source licenses": "オープンソースライセンス",
+  "The fonts and libraries built into SquirrelDisk, and their licenses.": "SquirrelDisk に含まれるフォントとライブラリ、およびそのライセンス。"
 }

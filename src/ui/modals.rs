@@ -75,6 +75,62 @@ pub(super) fn wrapped(ui: &Ui, pos: Pos2, width: f32, text: &str, f: egui::FontI
     h
 }
 
+/// The thin scrollbar at a card's right edge for `body`, once `content_h` is
+/// taller than it; dragging the thumb moves `scroll`.
+pub(super) fn scrollbar(ui: &mut Ui, card: Rect, body: Rect, content_h: f32, scroll: &mut f32, id: &str, theme: &Theme) {
+    let max_scroll = (content_h - body.height()).max(0.0);
+    if max_scroll <= 0.0 {
+        return;
+    }
+    let track = Rect::from_min_max(Pos2::new(card.right() - 11.0, body.top() + 4.0), Pos2::new(card.right() - 6.0, body.bottom() - 4.0));
+    let thumb_h = (track.height() * body.height() / content_h).max(28.0);
+    let t = *scroll / max_scroll;
+    let thumb = Rect::from_min_size(Pos2::new(track.left(), track.top() + (track.height() - thumb_h) * t), Vec2::new(track.width(), thumb_h));
+    let resp = ui.interact(thumb.expand2(Vec2::new(4.0, 0.0)), Id::new(id), Sense::drag());
+    if resp.dragged() {
+        *scroll = (*scroll + resp.drag_delta().y * max_scroll / (track.height() - thumb_h).max(1.0)).clamp(0.0, max_scroll);
+    }
+    let h = ui.ctx().animate_bool_with_time(Id::new((id, "hover")), resp.hovered() || resp.dragged(), 0.12);
+    let p = ui.painter();
+    p.rect_filled(track, widgets::cr(3.0), with_alpha(theme.stroke, 0.35));
+    p.rect_filled(thumb, widgets::cr(3.0), lerp_color(with_alpha(theme.text_faint, 0.8), theme.text_dim, h));
+}
+
+/// The licenses of the fonts and crates built in (scripts/third-party-licenses.py).
+const THIRD_PARTY: &str = include_str!("../../THIRD-PARTY-LICENSES.txt");
+
+/// THIRD_PARTY cut into lines of at most `cols` characters, at spaces where
+/// possible. Kept until the width changes: the text is long.
+fn license_lines(cols: usize) -> Arc<Vec<&'static str>> {
+    static CACHE: Mutex<Option<(usize, Arc<Vec<&'static str>>)>> = Mutex::new(None);
+    let mut cache = CACHE.lock().unwrap();
+    if let Some((_, lines)) = cache.as_ref().filter(|(c, _)| *c == cols) {
+        return lines.clone();
+    }
+    let lines = Arc::new(wrap_lines(THIRD_PARTY, cols.max(20)));
+    *cache = Some((cols, lines.clone()));
+    lines
+}
+
+fn wrap_lines(text: &str, cols: usize) -> Vec<&str> {
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let mut rest = line.trim_end();
+        while let Some((cut, _)) = rest.char_indices().nth(cols) {
+            // a break after the indent, else mid-word
+            let indent = rest.len() - rest.trim_start().len();
+            let at = match rest[..cut].rfind(' ') {
+                Some(s) if s > indent => s,
+                _ => cut,
+            };
+            out.push(rest[..at].trim_end());
+            rest = rest[at..].trim_start();
+        }
+        out.push(rest);
+    }
+    out
+}
+
 impl App {
     pub fn modal_ui(&mut self, ctx: &egui::Context) {
         let Some(modal) = self.modal.take() else { return };
@@ -96,6 +152,7 @@ impl App {
             Modal::Preview => self.preview_modal(ctx),
             Modal::Folder(f) => self.folder_modal(ctx, f),
             Modal::Smb(f) => self.smb_modal(ctx, f),
+            Modal::Licenses { scroll } => self.licenses_modal(ctx, scroll),
         };
         // a modal may have opened another one
         if self.modal.is_none() {
@@ -242,21 +299,7 @@ impl App {
                 content_h = y - top + 8.0;
             });
             // scrollbar, when the notes are longer than the window
-            let max_scroll = (content_h - body.height()).max(0.0);
-            if max_scroll > 0.0 {
-                let track = Rect::from_min_max(Pos2::new(card.right() - 11.0, body.top() + 4.0), Pos2::new(card.right() - 6.0, body.bottom() - 4.0));
-                let thumb_h = (track.height() * body.height() / content_h).max(28.0);
-                let t = scroll / max_scroll;
-                let thumb = Rect::from_min_size(Pos2::new(track.left(), track.top() + (track.height() - thumb_h) * t), Vec2::new(track.width(), thumb_h));
-                let resp = ui.interact(thumb.expand2(Vec2::new(4.0, 0.0)), Id::new("update-scroll"), Sense::drag());
-                if resp.dragged() {
-                    scroll = (scroll + resp.drag_delta().y * max_scroll / (track.height() - thumb_h).max(1.0)).clamp(0.0, max_scroll);
-                }
-                let h = ui.ctx().animate_bool_with_time(Id::new("update-scroll-h"), resp.hovered() || resp.dragged(), 0.1);
-                let p = ui.painter();
-                p.rect_filled(track, widgets::cr(3.0), with_alpha(theme.stroke, 0.35));
-                p.rect_filled(thumb, widgets::cr(3.0), lerp_color(with_alpha(theme.text_faint, 0.8), theme.text_dim, h));
-            }
+            scrollbar(ui, card, body, content_h, &mut scroll, "update-scroll", &theme);
             let p = ui.painter();
             p.line_segment([Pos2::new(x0, body.bottom() + 4.0), Pos2::new(x0 + w, body.bottom() + 4.0)], Stroke::new(1.0, with_alpha(theme.stroke, 0.7)));
             let width = |label: &str| p.layout_no_wrap(label.to_string(), bold(13.0), theme.text).size().x + 40.0;
@@ -296,6 +339,41 @@ impl App {
             close = widgets::button(ui, b, Id::new("err-ok"), tr("OK"), None, BtnStyle::Primary, &theme).clicked();
         });
         if close || bd { None } else { Some(Modal::Error { title: t, message }) }
+    }
+
+    /// The fonts' and crates' licenses; closing it goes back to Settings.
+    fn licenses_modal(&mut self, ctx: &egui::Context, mut scroll: f32) -> Option<Modal> {
+        let theme = self.theme.clone();
+        let mut close = false;
+        let bd = modal_frame(ctx, self.modal_opened, Vec2::new(680.0, 760.0), &theme, |ui, card| {
+            title(ui, card, tr("Open-source licenses"), Some(tr("The fonts and libraries built into SquirrelDisk, and their licenses.")), &theme);
+            close = close_button(ui, card, &theme);
+            let (x0, w) = (card.left() + 28.0, card.width() - 56.0);
+            let body = Rect::from_min_max(Pos2::new(card.left(), card.top() + 92.0), Pos2::new(card.right(), card.bottom() - 16.0));
+            let f = egui::FontId::monospace(11.5);
+            let glyph = ui.painter().layout_no_wrap("0".into(), f.clone(), theme.text).size();
+            let lines = license_lines((w / glyph.x).floor() as usize);
+            let line_h = glyph.y + 2.0;
+            let content_h = lines.len() as f32 * line_h + 8.0;
+            if ui.rect_contains_pointer(body) {
+                scroll -= super::app::scroll_delta(ui);
+            }
+            scroll = scroll.clamp(0.0, (content_h - body.height()).max(0.0));
+            // only the lines in view: the text is thousands of lines long
+            let p = ui.painter().with_clip_rect(body.intersect(ui.clip_rect()));
+            let first = (scroll / line_h) as usize;
+            let shown = (body.height() / line_h) as usize + 2;
+            for (k, line) in lines.iter().enumerate().skip(first).take(shown) {
+                let y = body.top() + 4.0 + k as f32 * line_h - scroll;
+                p.text(Pos2::new(x0, y), Align2::LEFT_TOP, *line, f.clone(), theme.text_dim);
+            }
+            scrollbar(ui, card, body, content_h, &mut scroll, "licenses-scroll", &theme);
+        });
+        if close || bd {
+            self.open_modal(Modal::Settings);
+            return None;
+        }
+        Some(Modal::Licenses { scroll })
     }
 
     fn preview_modal(&mut self, ctx: &egui::Context) -> Option<Modal> {
@@ -374,6 +452,7 @@ impl App {
         let mut new_lang: Option<String> = None;
         let mut scroll = self.settings_scroll;
         let mut content_h = self.settings_content_h;
+        let mut open_licenses = false;
         let bd = modal_frame(ctx, self.modal_opened, Vec2::new(620.0, 760.0), &theme, |ui, card| {
             title(ui, card, tr("Settings"), Some(tr("Appearance, sounds and behaviour.")), &theme);
             close = close_button(ui, card, &theme);
@@ -566,20 +645,8 @@ impl App {
                     let r = Rect::from_min_max(Pos2::new(body.left(), body.bottom() - 18.0), Pos2::new(body.right() - 14.0, body.bottom()));
                     widgets::vgradient(p, r, with_alpha(bg, 0.0), bg);
                 }
-                // custom scrollbar
-                let track = Rect::from_min_max(Pos2::new(card.right() - 11.0, body.top() + 4.0), Pos2::new(card.right() - 6.0, body.bottom() - 4.0));
-                let thumb_h = (track.height() * body.height() / content_h).max(28.0);
-                let t = scroll / max_scroll;
-                let thumb = Rect::from_min_size(Pos2::new(track.left(), track.top() + (track.height() - thumb_h) * t), Vec2::new(track.width(), thumb_h));
-                let resp = ui.interact(thumb.expand2(Vec2::new(4.0, 0.0)), Id::new("settings-scroll"), Sense::drag());
-                if resp.dragged() {
-                    scroll = (scroll + resp.drag_delta().y * max_scroll / (track.height() - thumb_h).max(1.0)).clamp(0.0, max_scroll);
-                }
-                let h = ui.ctx().animate_bool_with_time(Id::new("settings-scroll-h"), resp.hovered() || resp.dragged(), 0.12);
-                let p = ui.painter();
-                p.rect_filled(track, widgets::cr(3.0), with_alpha(theme.stroke, 0.35));
-                p.rect_filled(thumb, widgets::cr(3.0), lerp_color(with_alpha(theme.text_faint, 0.8), theme.text_dim, h));
             }
+            scrollbar(ui, card, body, content_h, &mut scroll, "settings-scroll", &theme);
             let y = card.bottom() - 62.0;
             let p = ui.painter();
             p.line_segment([Pos2::new(x0, y), Pos2::new(x0 + w, y)], Stroke::new(1.0, with_alpha(theme.stroke, 0.7)));
@@ -592,8 +659,21 @@ impl App {
             p.text(Pos2::new(x0, y + 18.0), Align2::LEFT_CENTER, line, font(12.0), theme.text_dim);
             // AGPL-3.0 §5: say it's modified, under which license, and where the source is
             let legal = format!("© Adileo Barone · {} · {}", tr("modified by Randy420Marsh"), crate::SOURCE_URL);
-            let legal = widgets::truncate(p, &legal, &font(11.0), w);
+            // and, at its end, the bundled fonts' and crates' licenses
+            let link = tr("Licenses");
+            let lw = p.layout_no_wrap(link.to_string(), bold(11.0), theme.text).size().x;
+            let legal = widgets::truncate(p, &legal, &font(11.0), w - lw - 16.0);
             p.text(Pos2::new(x0, y + 38.0), Align2::LEFT_CENTER, legal, font(11.0), theme.text_faint);
+            let lr = Rect::from_center_size(Pos2::new(x0 + w - lw / 2.0, y + 38.0), Vec2::new(lw + 12.0, 26.0));
+            mark("settings-licenses", lr);
+            let resp = ui.interact(lr, Id::new("settings-licenses"), Sense::click());
+            let p = ui.painter();
+            let h = ui.ctx().animate_bool_with_time(Id::new("settings-licenses"), resp.hovered(), 0.1);
+            p.text(Pos2::new(x0 + w, y + 38.0), Align2::RIGHT_CENTER, link, bold(11.0), lerp_color(theme.accent, theme.text, h));
+            if resp.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+            open_licenses |= resp.clicked();
             if picker {
                 // grid of languages drawn over the settings card
                 let cols = 3;
@@ -681,6 +761,10 @@ impl App {
         self.settings = s;
         if changed {
             self.settings.save();
+        }
+        if open_licenses {
+            self.open_modal(Modal::Licenses { scroll: 0.0 });
+            return None;
         }
         if close || bd { None } else { Some(Modal::Settings) }
     }
@@ -1074,4 +1158,21 @@ fn theme_swatch(ui: &mut Ui, r: Rect, t: &Theme, selected: bool, time: f64) -> e
     p.text(Pos2::new(rr.left() + 10.0, rr.bottom() - 13.0), Align2::LEFT_CENTER, t.name, bold(11.5), t.text);
     p.rect_stroke(rr, cr(12.0), Stroke::new(1.0 + 1.5 * s, lerp_color(with_alpha(t.stroke, 0.8), t.accent, s.max(h * 0.5))), egui::StrokeKind::Inside);
     resp
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn license_text_wraps_and_names_the_fonts() {
+        let lines = wrap_lines("one two three four\n\n  indented line here", 10);
+        assert_eq!(lines, ["one two", "three four", "", "  indented", "line here"]);
+        // a word longer than the line is cut
+        assert_eq!(wrap_lines("abcdefghij", 4), ["abcd", "efgh", "ij"]);
+        assert!(license_lines(70).iter().all(|l| l.chars().count() <= 70));
+        for name in ["Inter", "Fredoka", "UBUNTU FONT LICENCE", "eframe", "Apache License, Version 2.0"] {
+            assert!(THIRD_PARTY.contains(name), "{name}");
+        }
+    }
 }

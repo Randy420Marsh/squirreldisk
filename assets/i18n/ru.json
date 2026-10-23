@@ -370,5 +370,8 @@
   "empty for a guest": "пусто для гостя",
   "share": "общая папка",
   "{size} free after": "{size} свободно после",
-  "{size} to free": "{size} освободится"
+  "{size} to free": "{size} освободится",
+  "Licenses": "Лицензии",
+  "Open-source licenses": "Лицензии открытого ПО",
+  "The fonts and libraries built into SquirrelDisk, and their licenses.": "Шрифты и библиотеки, встроенные в SquirrelDisk, и их лицензии."
 }

@@ -370,5 +370,8 @@
   "empty for a guest": "అతిథి కోసం ఖాళీగా ఉంచండి",
   "share": "షేర్",
   "{size} free after": "తర్వాత {size} ఖాళీ",
-  "{size} to free": "{size} ఖాళీ అవుతుంది"
+  "{size} to free": "{size} ఖాళీ అవుతుంది",
+  "Licenses": "లైసెన్సులు",
+  "Open-source licenses": "ఓపెన్ సోర్స్ లైసెన్సులు",
+  "The fonts and libraries built into SquirrelDisk, and their licenses.": "SquirrelDiskలో ఉన్న ఫాంట్‌లు, లైబ్రరీలు మరియు వాటి లైసెన్సులు."
 }

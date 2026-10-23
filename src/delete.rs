@@ -385,7 +385,14 @@ fn open_same_file(path: &Path, md: &std::fs::Metadata) -> std::io::Result<std::f
         use std::os::unix::fs::MetadataExt;
         now.dev() == md.dev() && now.ino() == md.ino()
     };
-    #[cfg(not(unix))]
+    // no stable file id on Windows: a file renamed into place keeps its own
+    // creation time, and its size and last write rarely match either
+    #[cfg(windows)]
+    let same = {
+        use std::os::windows::fs::MetadataExt;
+        now.creation_time() == md.creation_time() && now.last_write_time() == md.last_write_time() && now.file_size() == md.file_size()
+    };
+    #[cfg(not(any(unix, windows)))]
     let same = md.is_file();
     if now.is_file() && same {
         Ok(f)

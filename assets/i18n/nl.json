@@ -370,5 +370,8 @@
   "empty for a guest": "leeg voor gast",
   "share": "share",
   "{size} free after": "{size} vrij daarna",
-  "{size} to free": "{size} vrij te maken"
+  "{size} to free": "{size} vrij te maken",
+  "Licenses": "Licenties",
+  "Open-source licenses": "Opensourcelicenties",
+  "The fonts and libraries built into SquirrelDisk, and their licenses.": "De lettertypen en bibliotheken in SquirrelDisk, en hun licenties."
 }

@@ -36,10 +36,11 @@ for s in 16 32 48 64 128 256 512; do
 done
 cp assets/icon/icon-256.png "$APP/squirreldisk.png"
 cp assets/icon/icon-256.png "$APP/.DirIcon"
-install -Dm644 -t "$APP/usr/share/doc/squirreldisk" NOTICE.md LICENSE
+install -Dm644 -t "$APP/usr/share/doc/squirreldisk" NOTICE.md LICENSE THIRD-PARTY-LICENSES.txt
 
 # AppImageUpdate and Gear Lever update it from this fork's releases
 ARCH="$ARCH" "$TOOL" \
   -u "gh-releases-zsync|Randy420Marsh|squirreldisk|latest|SquirrelDisk-$ARCH.AppImage.zsync" \
   "$APP" "$OUT"
-"$OUT" --version
+# a bare name would be looked up in PATH; extract-and-run needs no FUSE
+APPIMAGE_EXTRACT_AND_RUN=1 "$(realpath "$OUT")" --version

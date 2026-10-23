@@ -43,9 +43,9 @@ install -Dm644 assets/icon/icon-256.png "$WORK/res/mipmap/ic_launcher.png"
 mkdir -p "$WORK/apk/lib/arm64-v8a"
 cp "target/$TARGET/release/libsquirreldisk_android.so" "$WORK/apk/lib/arm64-v8a/"
 cp "target/$TARGET/release/squirreldisk" "$WORK/apk/lib/arm64-v8a/libsquirreldisk_ssh.so"
-cp LICENSE NOTICE.md "$WORK/apk/"
+cp LICENSE NOTICE.md THIRD-PARTY-LICENSES.txt "$WORK/apk/"
 # stored, not compressed: Android maps the library straight from the APK
-(cd "$WORK/apk" && zip -q -0 -r ../app.apk lib && zip -q -r ../app.apk LICENSE NOTICE.md)
+(cd "$WORK/apk" && zip -q -0 -r ../app.apk lib && zip -q -r ../app.apk LICENSE NOTICE.md THIRD-PARTY-LICENSES.txt)
 "$BT/zipalign" -f -P 16 4 "$WORK/app.apk" "$WORK/aligned.apk"
 
 KEY="${ANDROID_KEYSTORE:-target/android/debug.keystore}"

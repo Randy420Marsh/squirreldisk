@@ -45,6 +45,21 @@ entry. All passes and the truncate use that one handle.
 File: `src/delete.rs`.
 Test: `delete::tests::erase_never_writes_through_a_swapped_file`.
 
+### Secure erase on Windows didn't notice a swapped file
+
+**Bug.** The fix above checked device and inode on Unix only. On Windows,
+`open_same_file()` accepted any regular file at the path, so a different file
+renamed into place after the scan would still be overwritten three times.
+Found when the test failed on the Windows CI runner. This fork only; upstream
+had the older, wider bug above.
+
+**Fix.** On Windows the open handle must also match the scanned entry's
+creation time, last write time and size (stable Rust has no file id there).
+A file renamed into place keeps its own creation time.
+File: `src/delete.rs`.
+Test: `delete::tests::erase_never_writes_through_a_swapped_file`, now on
+Windows too.
+
 ### Secure erase emptied hard-linked files
 
 **Bug.** A file with other hard links is meant to be only unlinked, since
@@ -130,6 +145,18 @@ are ever overwritten, so this can't reach a symlink target or a device.
 Closing it needs `openat`-style traversal from the scan root.
 
 ## Linux desktop and AppImage
+
+### The AppImage release jobs failed after a good build
+
+**Bug.** `scripts/build-appimage.sh` ended with `"$OUT" --version` as a smoke
+test. The release workflow passes a bare file name (`SquirrelDisk-x86_64.AppImage`),
+so bash looked it up in `PATH` and stopped with "command not found" (exit
+127), although the AppImage had been built. This fork only.
+
+**Fix.** Run it by its full path, with `APPIMAGE_EXTRACT_AND_RUN=1` so it
+needs no FUSE.
+File: `scripts/build-appimage.sh`.
+Test: the release workflow's Linux jobs.
 
 ### Programs started from the AppImage loaded its libraries
 

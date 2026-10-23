@@ -370,5 +370,8 @@
   "empty for a guest": "kosongkan untuk tamu",
   "share": "folder bersama",
   "{size} free after": "{size} kosong setelahnya",
-  "{size} to free": "{size} akan dikosongkan"
+  "{size} to free": "{size} akan dikosongkan",
+  "Licenses": "Lisensi",
+  "Open-source licenses": "Lisensi sumber terbuka",
+  "The fonts and libraries built into SquirrelDisk, and their licenses.": "Font dan pustaka yang disertakan dalam SquirrelDisk, beserta lisensinya."
 }

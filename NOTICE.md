@@ -23,6 +23,12 @@ every change in detail, with its date.
 - An Android build (`src/android.rs`, `src/lib.rs`, `src/sshc.rs`,
   `packaging/android/`, `scripts/build-android.sh`).
 - Translations for the new texts in all languages (`assets/i18n/*`).
+- The licenses of the bundled fonts and crates: `THIRD-PARTY-LICENSES.txt`
+  (made by `scripts/third-party-licenses.py` and checked in CI), shipped in
+  every package and shown under Settings → Licenses; the font license in
+  `assets/fonts/OFL.txt`.
+- Secure erase on Windows checks that the file is still the one scanned
+  before overwriting it (`src/delete.rs`).
 
 ### 2026-10-22: no-network build (based on upstream 2.6.1)
 

@@ -74,7 +74,7 @@ ones:
 | `SQD_WINDOW=WxH` | start at this size (and skip the automatic placement) |
 | `SQD_SCAN=/` | scan at launch |
 | `SQD_SCAN=smb://user@host:port/share?v=3&enc=1` with `SQD_SMB_PASSWORD=pw` | scan a share at launch |
-| `SQD_MODAL=settings\|delete\|ssh\|smb\|rclone` | open a dialog |
+| `SQD_MODAL=settings\|delete\|ssh\|smb\|licenses\|rclone` | open a dialog |
 | `SQD_SCREEN=dupes` with `SQD_DUPES_PICK=1` | duplicate finder with mock results |
 | `SQD_SCREEN=dupes` with `SQD_DUPES_ADD=1` | duplicate finder with the "Add place" menu open |
 | `SQD_SHOT=prefix`, `SQD_SHOT_AT=3`, `SQD_QUIT=1` | screenshot after 3 s, then quit |

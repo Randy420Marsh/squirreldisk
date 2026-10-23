@@ -38,10 +38,11 @@
             <Environment Id="UserPath" Name="PATH" Value="[INSTALLFOLDER]" Part="last" Action="set" System="no" Permanent="no" />
             <RegistryValue Root="HKCU" Key="Software\SquirrelDisk" Name="CommandLine" Type="integer" Value="1" KeyPath="yes" />
           </Component>
-          <!-- The license (AGPL-3.0) and what this fork changed -->
+          <!-- The license (AGPL-3.0), what this fork changed, and the bundled fonts and crates' licenses -->
           <Component Id="LegalFiles" Guid="a1cdcc6d-c294-4854-8526-85a61f821457">
             <File Id="License" Name="LICENSE.txt" Source="LICENSE" />
             <File Id="Notice" Name="NOTICE.md" Source="NOTICE.md" />
+            <File Id="ThirdParty" Name="THIRD-PARTY-LICENSES.txt" Source="THIRD-PARTY-LICENSES.txt" />
             <RegistryValue Root="HKCU" Key="Software\SquirrelDisk" Name="LegalFiles" Type="integer" Value="1" KeyPath="yes" />
           </Component>
           <!-- "Scan with SquirrelDisk", added by the app when turned on in Settings -->

@@ -370,5 +370,8 @@
   "empty for a guest": "để trống cho khách",
   "share": "thư mục chia sẻ",
   "{size} free after": "{size} trống sau đó",
-  "{size} to free": "{size} sẽ giải phóng"
+  "{size} to free": "{size} sẽ giải phóng",
+  "Licenses": "Giấy phép",
+  "Open-source licenses": "Giấy phép mã nguồn mở",
+  "The fonts and libraries built into SquirrelDisk, and their licenses.": "Các phông chữ và thư viện có trong SquirrelDisk cùng giấy phép của chúng."
 }

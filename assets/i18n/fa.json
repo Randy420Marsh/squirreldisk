@@ -370,5 +370,8 @@
   "empty for a guest": "برای مهمان خالی بگذارید",
   "share": "پوشهٔ اشتراکی",
   "{size} free after": "{size} آزاد پس از آن",
-  "{size} to free": "{size} برای آزادسازی"
+  "{size} to free": "{size} برای آزادسازی",
+  "Licenses": "مجوزها",
+  "Open-source licenses": "مجوزهای متن‌باز",
+  "The fonts and libraries built into SquirrelDisk, and their licenses.": "قلم‌ها و کتابخانه‌های گنجانده‌شده در SquirrelDisk و مجوزهای آن‌ها."
 }

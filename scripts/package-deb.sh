@@ -22,6 +22,7 @@ for s in 16 32 48 64 128 256 512; do
 done
 DOC="$ROOT/usr/share/doc/squirreldisk"
 install -Dm644 NOTICE.md "$DOC/NOTICE.md"
+install -Dm644 THIRD-PARTY-LICENSES.txt "$DOC/THIRD-PARTY-LICENSES.txt"
 # AGPL-3.0 isn't in /usr/share/common-licenses, so the full text goes here
 {
   cat <<EOF

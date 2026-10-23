@@ -376,5 +376,8 @@
   "empty for a guest": "tyhjä vieraalle",
   "share": "jako",
   "{size} free after": "{size} vapaana sen jälkeen",
-  "{size} to free": "{size} vapautettavana"
+  "{size} to free": "{size} vapautettavana",
+  "Licenses": "Lisenssit",
+  "Open-source licenses": "Avoimen lähdekoodin lisenssit",
+  "The fonts and libraries built into SquirrelDisk, and their licenses.": "SquirrelDiskiin sisältyvät fontit ja kirjastot sekä niiden lisenssit."
 }

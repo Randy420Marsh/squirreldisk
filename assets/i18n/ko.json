@@ -370,5 +370,8 @@
   "empty for a guest": "게스트는 비워 두세요",
   "share": "공유",
   "{size} free after": "이후 여유 공간 {size}",
-  "{size} to free": "{size} 확보"
+  "{size} to free": "{size} 확보",
+  "Licenses": "라이선스",
+  "Open-source licenses": "오픈 소스 라이선스",
+  "The fonts and libraries built into SquirrelDisk, and their licenses.": "SquirrelDisk에 포함된 글꼴과 라이브러리, 그리고 그 라이선스입니다."
 }

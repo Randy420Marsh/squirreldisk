@@ -333,6 +333,8 @@ pub enum Modal {
     Folder(Box<super::pick::FolderPick>),
     /// Scan a Windows (SMB) share.
     Smb(Box<super::smb::SmbForm>),
+    /// The licenses of the bundled fonts and crates, from Settings.
+    Licenses { scroll: f32 },
 }
 
 /// Drives the animated Dock tile on macOS.
@@ -1145,6 +1147,9 @@ impl App {
                 } else {
                     self.modal = None;
                 }
+            } else if matches!(self.modal, Some(Modal::Licenses { .. })) {
+                // the licenses were opened from Settings
+                self.open_modal(Modal::Settings);
             } else if self.modal.as_ref().is_some_and(|m| !matches!(m, Modal::Deleting { .. } | Modal::DupesRemoving { .. })) {
                 self.modal = None;
             } else if self.drag.is_some() {

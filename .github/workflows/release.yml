@@ -149,7 +149,7 @@ jobs:
         run: |
           cargo build --release
           mkdir -p pkg/SquirrelDisk
-          cp target/release/squirreldisk packaging/linux/squirreldisk.desktop NOTICE.md LICENSE pkg/SquirrelDisk/
+          cp target/release/squirreldisk packaging/linux/squirreldisk.desktop NOTICE.md LICENSE THIRD-PARTY-LICENSES.txt pkg/SquirrelDisk/
           cp assets/icon/icon-256.png pkg/SquirrelDisk/squirreldisk.png
           tar -C pkg -czf SquirrelDisk-Linux-${{ matrix.arch }}.tar.gz SquirrelDisk
       - name: Build the AppImage

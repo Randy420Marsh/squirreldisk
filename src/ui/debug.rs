@@ -5,7 +5,7 @@
 //! * `SQD_SMB_PASSWORD=<pw>` the password for those shares
 //! * `SQD_SHOT=<prefix>`     save screenshots as `<prefix>-<n>.bmp`
 //! * `SQD_SHOT_AT=3,8`       seconds after launch at which to shoot
-//! * `SQD_MODAL=settings|settings-end|ssh|sshauth|rclone|delete` open a modal before shooting
+//! * `SQD_MODAL=settings|settings-end|ssh|sshauth|smb|licenses|rclone|delete` open a modal before shooting
 //! * `SQD_COLLECT=2`         collect the N biggest children of the root
 //! * `SQD_QUIT=1`            quit after the last screenshot
 //! * `SQD_FULLSCREEN=1`      go full screen at launch
@@ -138,6 +138,7 @@ impl App {
                 }
                 Ok("ssh") => self.open_modal(Modal::Ssh { host: String::new(), path: "/".into() }),
                 Ok("smb") => self.open_modal(Modal::Smb(Default::default())),
+                Ok("licenses") => self.open_modal(Modal::Licenses { scroll: 0.0 }),
                 Ok("sshauth") => self.open_modal(Modal::SshAuth { host: "user@server".into(), path: "/".into(), secret: String::new(), retry: false }),
                 Ok(m) if m.starts_with("cloud") => {
                     let kind = m.trim_start_matches("cloud").trim_start_matches(':');

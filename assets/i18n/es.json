@@ -370,5 +370,8 @@
   "empty for a guest": "vacío para invitado",
   "share": "recurso compartido",
   "{size} free after": "{size} libres después",
-  "{size} to free": "{size} por liberar"
+  "{size} to free": "{size} por liberar",
+  "Licenses": "Licencias",
+  "Open-source licenses": "Licencias de código abierto",
+  "The fonts and libraries built into SquirrelDisk, and their licenses.": "Las fuentes y bibliotecas incluidas en SquirrelDisk y sus licencias."
 }

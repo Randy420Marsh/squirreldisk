@@ -370,5 +370,8 @@
   "empty for a guest": "விருந்தினருக்கு காலியாக விடவும்",
   "share": "பகிர்வு",
   "{size} free after": "பின்னர் {size} காலி",
-  "{size} to free": "{size} விடுவிக்கப்படும்"
+  "{size} to free": "{size} விடுவிக்கப்படும்",
+  "Licenses": "உரிமங்கள்",
+  "Open-source licenses": "திறந்த மூல உரிமங்கள்",
+  "The fonts and libraries built into SquirrelDisk, and their licenses.": "SquirrelDisk-இல் உள்ள எழுத்துருக்கள், நூலகங்கள் மற்றும் அவற்றின் உரிமங்கள்."
 }

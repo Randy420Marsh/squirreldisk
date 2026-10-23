@@ -370,5 +370,8 @@
   "empty for a guest": "اتركه فارغًا للضيف",
   "share": "مجلد مشترك",
   "{size} free after": "{size} متاحة بعدها",
-  "{size} to free": "{size} للتحرير"
+  "{size} to free": "{size} للتحرير",
+  "Licenses": "التراخيص",
+  "Open-source licenses": "تراخيص المصادر المفتوحة",
+  "The fonts and libraries built into SquirrelDisk, and their licenses.": "الخطوط والمكتبات المضمّنة في SquirrelDisk وتراخيصها."
 }

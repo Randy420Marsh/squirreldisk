@@ -37,6 +37,9 @@ jobs:
       - run: cargo clippy --release --no-default-features -- -D warnings
       - run: cargo test --release
       - run: cargo build --release --no-default-features
+      # THIRD-PARTY-LICENSES.txt must match Cargo.lock (fetch gets every platform's crates)
+      - if: matrix.os == 'ubuntu-24.04'
+        run: cargo fetch && python3 scripts/third-party-licenses.py --check
       # Windows: the `squirreldisk` command goes through squirreldisk.com, a
       # console shim that runs the GUI exe with the terminal's handles; check
       # its output does come through, and that the installer still builds.

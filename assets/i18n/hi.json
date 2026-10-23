@@ -370,5 +370,8 @@
   "empty for a guest": "अतिथि के लिए खाली छोड़ें",
   "share": "साझा फ़ोल्डर",
   "{size} free after": "बाद में {size} खाली",
-  "{size} to free": "{size} खाली होगा"
+  "{size} to free": "{size} खाली होगा",
+  "Licenses": "लाइसेंस",
+  "Open-source licenses": "ओपन-सोर्स लाइसेंस",
+  "The fonts and libraries built into SquirrelDisk, and their licenses.": "SquirrelDisk में शामिल फ़ॉन्ट और लाइब्रेरी, और उनके लाइसेंस।"
 }

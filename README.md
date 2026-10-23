@@ -165,6 +165,23 @@ This fork sends nothing anywhere. There is no sponsor banner, no analytics, no c
 
 Report bugs and suggest ideas in this fork's [issues](https://github.com/Randy420Marsh/squirreldisk/issues). Problems that also happen in the original SquirrelDisk can go [upstream](https://github.com/adileo/squirreldisk/issues).
 
+## Tested platforms
+
+Every push runs clippy, the tests (including the layout tests in landscape and portrait) and the headless build on each platform below ([ci.yml](.github/workflows/ci.yml)). Every tag builds the packages on the same machines ([release.yml](.github/workflows/release.yml)).
+
+| Platform | Tested on every push | Release packages |
+|----------|----------------------|------------------|
+| Ubuntu 24.04, x86_64 | ✓ (and the third-party license list) | `.deb`; the AppImage and `.tar.gz` are built in an Ubuntu 22.04 container, so they run on older systems too |
+| Ubuntu 26.04, x86_64 | ✓ | `.deb` |
+| Ubuntu 24.04, arm64 | ✓ | AppImage, `.tar.gz` (built in Ubuntu 22.04) |
+| Debian 13 (trixie), arm64 | built in a Debian container | `.deb` for Raspberry Pi OS |
+| Arch Linux, x86_64 | ✓ in an Arch container | `.pkg.tar.zst` |
+| macOS (Apple silicon runner) | ✓ | universal `.dmg` (Apple silicon and Intel) |
+| Windows (latest runner), x86_64 | ✓, plus the command-line shim and the MSI | `.msi`, portable `.exe` |
+| Android 16, arm64 | by hand (below) | not released: build it with [scripts/build-android.sh](scripts/build-android.sh) |
+
+Tried by hand as well: Ubuntu 24.04 on X11 (the main development machine), small screens down to 360x780 in portrait and 800x480 in landscape on a nested X server, SMB 1, 2 and 3 (with SMB 3 encryption) against local Samba test servers, and the Android build on the Android 16 emulator and on a OnePlus phone. The Android version is exploratory: it scans local storage and SMB shares, without SSH, cloud storage or the Trash.
+
 ## Build from source
 
 With [Rust](https://rustup.rs) installed:
@@ -173,11 +190,36 @@ With [Rust](https://rustup.rs) installed:
 cargo run --release
 ```
 
-On Linux you also need the ALSA, X11 and Wayland development packages (`libasound2-dev libxkbcommon-dev libwayland-dev libx11-dev` on Debian and Ubuntu, `alsa-lib libxkbcommon wayland libx11` on Arch). See [build.md](build.md) for the headless agent, packaging, the tests, and how to check that the build makes no network requests. [DEVELOPMENT.md](DEVELOPMENT.md) covers the workflow: the checks before a commit, layout testing at small sizes and in portrait, and the current state of work.
+What each build needs:
+
+| For | Tools and libraries |
+|-----|---------------------|
+| Every build | Rust stable (developed with 1.99) via [rustup](https://rustup.rs); `cargo` fetches the crates listed in `Cargo.lock` |
+| Linux | `build-essential pkg-config libasound2-dev libxkbcommon-dev libwayland-dev libx11-dev` on Debian and Ubuntu, `base-devel rust alsa-lib libxkbcommon libglvnd` on Arch. At run time: an OpenGL driver (it falls back to CPU drawing) and `xdg-desktop-portal` for the folder picker |
+| macOS | Xcode command-line tools; `rustup target add aarch64-apple-darwin x86_64-apple-darwin` for the universal app |
+| Windows | Visual Studio Build Tools (MSVC); for the installer, the .NET SDK and [WiX](https://wixtoolset.org) 5 (`dotnet tool install --global wix --version 5.0.2`) |
+| AppImage | [scripts/build-appimage.sh](scripts/build-appimage.sh) downloads `appimagetool`, or set `APPIMAGETOOL` to a copy you have |
+| `.deb` / Arch package | `dpkg-deb` ([scripts/package-deb.sh](scripts/package-deb.sh)) / `makepkg` ([packaging/arch](packaging/arch)) |
+| Android | Android SDK with platform 36 and build-tools, the NDK, a JDK (Android Studio's works) and `rustup target add aarch64-linux-android`; see [scripts/build-android.sh](scripts/build-android.sh) |
+| Optional | `rclone` for cloud storage and `ssh` for remote scans, both at run time; Python 3 for [scripts/third-party-licenses.py](scripts/third-party-licenses.py); Xephyr and `python3-pil` for the small-screen screenshots |
+
+See [build.md](build.md) for the headless agent, packaging, the tests, and how to check that the build makes no network requests. [DEVELOPMENT.md](DEVELOPMENT.md) covers the workflow: the checks before a commit, layout testing at small sizes and in portrait, and the current state of work.
 
 ## How this fork is made
 
 The changes in this fork were written with the help of an AI coding assistant (Claude Code) and reviewed by the fork's maintainer. Every change is in the git history, the tests run on every push, and fixed bugs are written up with their tests in [BUGS.md](BUGS.md).
+
+**Version 2.6.2 in numbers.** Everything from merging upstream SquirrelDisk 2.6.1 to this release was made in one Claude Code session with Claude Opus 5.5:
+
+| | |
+|-|-|
+| Time | about 9 hours, 2026-10-22 evening to 2026-10-23 morning (about 6.5 hours of active work) |
+| Model calls | 1,220 |
+| Tokens written by the model | 1.04 million |
+| Tokens read | 109.6 million: 106.2 million from the prompt cache, 3.4 million newly cached and about 2,400 uncached |
+| Result | 11 commits: SMB 1/2/3 with encryption, small screens and touch, Android, packages for six Linux flavours, landscape and portrait layout tests, CI on every platform and the license viewer |
+
+Most of the tokens read are the same project context being re-read from the cache on every step, which is why that number is so much larger than the amount written.
 
 ## License
 
@@ -186,3 +228,9 @@ The changes in this fork were written with the help of an AI coding assistant (C
 [NOTICE.md](NOTICE.md). The complete source of every build of this fork is
 here, at <https://github.com/Randy420Marsh/squirreldisk>, under the same
 license.
+
+The fonts and Rust crates built into the app are under their own permissive
+licenses (MIT, Apache 2.0, BSD, Zlib, OFL and similar), all compatible with the
+AGPL. Their notices are in
+[THIRD-PARTY-LICENSES.txt](THIRD-PARTY-LICENSES.txt), which ships with every
+package, and in the app under Settings → Licenses.

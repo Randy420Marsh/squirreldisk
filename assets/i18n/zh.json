@@ -370,5 +370,8 @@
   "empty for a guest": "访客请留空",
   "share": "共享",
   "{size} free after": "之后可用 {size}",
-  "{size} to free": "可释放 {size}"
+  "{size} to free": "可释放 {size}",
+  "Licenses": "许可证",
+  "Open-source licenses": "开源许可证",
+  "The fonts and libraries built into SquirrelDisk, and their licenses.": "SquirrelDisk 内置的字体和库及其许可证。"
 }

@@ -52,4 +52,5 @@ package() {
   done
   install -Dm644 NOTICE.md "$pkgdir/usr/share/doc/squirreldisk/NOTICE.md"
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/squirreldisk/LICENSE"
+  install -Dm644 THIRD-PARTY-LICENSES.txt "$pkgdir/usr/share/licenses/squirreldisk/THIRD-PARTY-LICENSES.txt"
 }

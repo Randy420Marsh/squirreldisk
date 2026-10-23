@@ -73,7 +73,8 @@ GUI afterwards or keep the agent somewhere else, for example with
 cargo test --release
 ```
 
-Expected result: all tests pass, with 1 ignored. The i18n test checks that
+Expected result: all tests pass, with 3 ignored (the SMB tests, which
+need local Samba servers, and the cloud account test, which needs rclone). The i18n test checks that
 every translation in `assets/i18n/*.json` parses and keeps its placeholders.
 
 ---

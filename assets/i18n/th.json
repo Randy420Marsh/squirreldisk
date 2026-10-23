@@ -370,5 +370,8 @@
   "empty for a guest": "เว้นว่างสำหรับผู้เยี่ยมชม",
   "share": "โฟลเดอร์แชร์",
   "{size} free after": "ว่าง {size} หลังจากนั้น",
-  "{size} to free": "จะได้พื้นที่คืน {size}"
+  "{size} to free": "จะได้พื้นที่คืน {size}",
+  "Licenses": "สัญญาอนุญาต",
+  "Open-source licenses": "สัญญาอนุญาตโอเพนซอร์ส",
+  "The fonts and libraries built into SquirrelDisk, and their licenses.": "ฟอนต์และไลบรารีที่รวมอยู่ใน SquirrelDisk และสัญญาอนุญาตของแต่ละรายการ"
 }

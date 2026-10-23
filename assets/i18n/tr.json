@@ -370,5 +370,8 @@
   "empty for a guest": "misafir için boş bırakın",
   "share": "paylaşım",
   "{size} free after": "Sonra {size} boş",
-  "{size} to free": "{size} boşalacak"
+  "{size} to free": "{size} boşalacak",
+  "Licenses": "Lisanslar",
+  "Open-source licenses": "Açık kaynak lisansları",
+  "The fonts and libraries built into SquirrelDisk, and their licenses.": "SquirrelDisk'e dahil edilen yazı tipleri ve kitaplıklar ile lisansları."
 }

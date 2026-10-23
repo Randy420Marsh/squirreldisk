@@ -370,5 +370,8 @@
   "empty for a guest": "अतिथीसाठी रिकामे ठेवा",
   "share": "शेअर",
   "{size} free after": "नंतर {size} मोकळे",
-  "{size} to free": "{size} मोकळे होईल"
+  "{size} to free": "{size} मोकळे होईल",
+  "Licenses": "परवाने",
+  "Open-source licenses": "ओपन-सोर्स परवाने",
+  "The fonts and libraries built into SquirrelDisk, and their licenses.": "SquirrelDisk मध्ये समाविष्ट फॉन्ट आणि लायब्ररी, आणि त्यांचे परवाने."
 }
