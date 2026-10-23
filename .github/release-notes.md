@@ -25,6 +25,7 @@ Everything else is as in upstream 2.6.1.
 - **Windows 10 / 11:** `SquirrelDisk-Windows.msi` (installer) or `squirreldisk-x86_64-pc-windows-msvc.exe` (portable).
 - **Linux:** `SquirrelDisk-x86_64.AppImage` (any distribution with glibc 2.35 or later), `SquirrelDisk-Ubuntu-24.04-amd64.deb`, `SquirrelDisk-Ubuntu-26.04-amd64.deb`, `SquirrelDisk-Arch-x86_64.pkg.tar.zst`, or `SquirrelDisk-Linux-x86_64.tar.gz`.
 - **Linux on 64-bit ARM:** `SquirrelDisk-aarch64.AppImage`, `SquirrelDisk-Linux-aarch64.tar.gz`, or `SquirrelDisk-Debian-trixie-arm64.deb` for the Raspberry Pi (64-bit Raspberry Pi OS) and Debian 13.
+- **Android 11 or later, arm64 (exploratory):** `SquirrelDisk-Android-arm64.apk`. It scans local storage and SMB shares, without SSH, cloud storage or the Trash.
 
 `SHA256SUMS` lists the checksum of every file. Check a download with `sha256sum -c SHA256SUMS --ignore-missing`.
 

@@ -6,7 +6,7 @@
 
 <p align="center">
   See what's using your disk space, and clean it up safely.<br>
-  For macOS, Windows and Linux. Free, and it makes no network requests of its own.
+  For macOS, Windows and Linux (x86_64 and arm64, including Raspberry Pi). Free, and it makes no network requests of its own.
 </p>
 
 <p align="center">
@@ -35,8 +35,9 @@
 | Linux (arm64), any distribution | [AppImage](https://github.com/Randy420Marsh/squirreldisk/releases/latest/download/SquirrelDisk-aarch64.AppImage) · [Archive (.tar.gz)](https://github.com/Randy420Marsh/squirreldisk/releases/latest/download/SquirrelDisk-Linux-aarch64.tar.gz) |
 | Raspberry Pi OS / Debian 13 (arm64) | [Package (.deb)](https://github.com/Randy420Marsh/squirreldisk/releases/latest/download/SquirrelDisk-Debian-trixie-arm64.deb) |
 | Arch Linux | [Package (.pkg.tar.zst)](https://github.com/Randy420Marsh/squirreldisk/releases/latest/download/SquirrelDisk-Arch-x86_64.pkg.tar.zst) |
+| Android 11 or later (arm64, exploratory) | [APK](https://github.com/Randy420Marsh/squirreldisk/releases/latest/download/SquirrelDisk-Android-arm64.apk) |
 
-Every build is on the [releases page](https://github.com/Randy420Marsh/squirreldisk/releases), made by [GitHub Actions](.github/workflows/release.yml) from the tagged source, with a `SHA256SUMS` file to check the downloads against. The builds are not signed, so macOS and Windows warn the first time (see below). SquirrelDisk never updates itself: download a new release when you want one. The AppImage also works with AppImageUpdate and Gear Lever, which fetch new releases from this fork when you ask them to.
+Every build is on the [releases page](https://github.com/Randy420Marsh/squirreldisk/releases), made by [GitHub Actions](.github/workflows/release.yml) from the tagged source, with a `SHA256SUMS` file to check the downloads against. The builds are not signed, so macOS and Windows warn the first time (see below). The newest build of `main` is the [`dev` pre-release](https://github.com/Randy420Marsh/squirreldisk/releases/tag/dev). SquirrelDisk never updates itself: download a new release when you want one. The AppImage also works with AppImageUpdate and Gear Lever, which fetch new releases from this fork when you ask them to.
 
 <details>
 <summary>macOS says the app can't be opened</summary>
@@ -167,7 +168,9 @@ Report bugs and suggest ideas in this fork's [issues](https://github.com/Randy42
 
 ## Tested platforms
 
-Every push runs clippy, the tests (including the layout tests in landscape and portrait) and the headless build on each platform below ([ci.yml](.github/workflows/ci.yml)). Every tag builds the packages on the same machines ([release.yml](.github/workflows/release.yml)).
+Every push to `main` runs clippy, the tests (including the layout tests in landscape and portrait) and the headless build on each platform below ([ci.yml](.github/workflows/ci.yml)), and builds every package ([release.yml](.github/workflows/release.yml)). Each build job runs `squirreldisk --version` on what it made: the `.deb` and Arch packages after installing them, the macOS app and the AppImage as built, and the Android APK's signature is checked. When every package builds, they replace the [`dev` pre-release](https://github.com/Randy420Marsh/squirreldisk/releases/tag/dev). A `v*` tag publishes them as a release.
+
+Last full run: commit `dbbd6f2` on 2026-10-23. All 6 test jobs and all 8 desktop package builds passed (Android was added to CI after that).
 
 | Platform | Tested on every push | Release packages |
 |----------|----------------------|------------------|
@@ -178,7 +181,7 @@ Every push runs clippy, the tests (including the layout tests in landscape and p
 | Arch Linux, x86_64 | ✓ in an Arch container | `.pkg.tar.zst` |
 | macOS (Apple silicon runner) | ✓ | universal `.dmg` (Apple silicon and Intel) |
 | Windows (latest runner), x86_64 | ✓, plus the command-line shim and the MSI | `.msi`, portable `.exe` |
-| Android 16, arm64 | by hand (below) | not released: build it with [scripts/build-android.sh](scripts/build-android.sh) |
+| Android 11 or later, arm64 | built only; tried by hand (below) | `.apk` |
 
 Tried by hand as well: Ubuntu 24.04 on X11 (the main development machine), small screens down to 360x780 in portrait and 800x480 in landscape on a nested X server, SMB 1, 2 and 3 (with SMB 3 encryption) against local Samba test servers, and the Android build on the Android 16 emulator and on a OnePlus phone. The Android version is exploratory: it scans local storage and SMB shares, without SSH, cloud storage or the Trash.
 
