@@ -55,6 +55,8 @@ pub enum PlaceKind {
     Disk,
     Server,
     Cloud,
+    /// A Windows (SMB) share.
+    Share,
 }
 
 /// A place added to the comparison.

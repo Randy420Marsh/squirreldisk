@@ -103,7 +103,7 @@ pub fn on_active_screen(frame: &eframe::Frame) -> Placed {
 /// X11: the monitor under the mouse (XRandR), less the panels and docks the
 /// window manager reserves (`_NET_WORKAREA`). Wayland doesn't let apps place
 /// windows at all, so there it is up to the compositor.
-#[cfg(not(any(target_os = "macos", windows)))]
+#[cfg(not(any(target_os = "macos", windows, target_os = "android")))]
 pub fn on_active_screen(frame: &eframe::Frame) -> Placed {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     let x11 = frame.window_handle().is_ok_and(|h| matches!(h.as_raw(), RawWindowHandle::Xlib(_) | RawWindowHandle::Xcb(_)));
@@ -116,7 +116,13 @@ pub fn on_active_screen(frame: &eframe::Frame) -> Placed {
     }
 }
 
-#[cfg(not(any(target_os = "macos", windows)))]
+/// Android: the app always fills the screen.
+#[cfg(target_os = "android")]
+pub fn on_active_screen(_frame: &eframe::Frame) -> Placed {
+    Placed::Done
+}
+
+#[cfg(not(any(target_os = "macos", windows, target_os = "android")))]
 fn x11_work_area() -> Option<(f64, f64, f64, f64)> {
     use std::os::raw::{c_int, c_uchar, c_uint, c_ulong};
     use x11_dl::{xlib, xrandr};

@@ -93,6 +93,9 @@ impl App {
             Modal::Update { scroll, content_h } => self.update_modal(ctx, scroll, content_h),
             Modal::DupesConfirm { ack, permanent } => self.dupes_confirm_modal(ctx, ack, permanent),
             Modal::DupesRemoving { finished_at } => self.dupes_removing_modal(ctx, finished_at),
+            Modal::Preview => self.preview_modal(ctx),
+            Modal::Folder(f) => self.folder_modal(ctx, f),
+            Modal::Smb(f) => self.smb_modal(ctx, f),
         };
         // a modal may have opened another one
         if self.modal.is_none() {
@@ -107,6 +110,9 @@ impl App {
         let theme = self.theme.clone();
         let mut close = false;
         let mut go = false;
+        let install_id = Id::new("auth-install-key-on");
+        #[cfg_attr(not(target_os = "android"), allow(unused_mut))]
+        let mut install_key = ctx.data(|d| d.get_temp::<bool>(install_id)).unwrap_or(false);
         let bd = modal_frame(ctx, self.modal_opened, Vec2::new(500.0, 290.0), &theme, |ui, card| {
             title(ui, card, tr("Authentication needed"), Some(&trf("{host} needs your SSH key passphrase or password.", &[("host", &host)])), &theme);
             close = close_button(ui, card, &theme);
@@ -140,12 +146,23 @@ impl App {
             y += 48.0;
             let note = if retry { tr("That didn't work, please try again.") } else { tr("Kept in memory for this session only, never saved to disk.") };
             ui.painter().text(Pos2::new(x0, y), Align2::LEFT_TOP, note, font(12.0), if retry { theme.danger } else { theme.text_faint });
+            // Android: after a password sign-in, the phone's own key can be
+            // added to the server, so the next scan needs no password
+            #[cfg(target_os = "android")]
+            {
+                let r = Rect::from_min_size(Pos2::new(x0, y + 26.0), Vec2::new(w, 22.0));
+                widgets::checkbox(ui, r, Id::new("auth-install-key"), &mut install_key, &trf("Add this phone's key to {host}", &[("host", &host)]), &theme);
+            }
             let b = Rect::from_min_size(Pos2::new(card.right() - 150.0, card.bottom() - 60.0), Vec2::new(122.0, 36.0));
             go |= widgets::button_ex(ui, b, Id::new("auth-go"), tr("Connect"), Some(Icon::Bolt), BtnStyle::Primary, &theme, !secret.is_empty()).clicked();
             let c = Rect::from_min_size(Pos2::new(card.right() - 260.0, card.bottom() - 60.0), Vec2::new(100.0, 36.0));
             close |= widgets::button(ui, c, Id::new("auth-cancel"), tr("Cancel"), None, BtnStyle::Ghost, &theme).clicked();
         });
+        ctx.data_mut(|d| d.insert_temp(install_id, install_key));
         if go && !secret.is_empty() {
+            if install_key {
+                crate::scan::remote::install_key_on(&host);
+            }
             crate::scan::remote::set_secret(&host, secret);
             self.modal = None;
             self.start_session(Target::Ssh { host, path });
@@ -279,6 +296,70 @@ impl App {
             close = widgets::button(ui, b, Id::new("err-ok"), tr("OK"), None, BtnStyle::Primary, &theme).clicked();
         });
         if close || bd { None } else { Some(Modal::Error { title: t, message }) }
+    }
+
+    fn preview_modal(&mut self, ctx: &egui::Context) -> Option<Modal> {
+        use super::preview::{Kind, Shown};
+        let mut pv = self.preview.take()?;
+        pv.poll(ctx);
+        let theme = self.theme.clone();
+        let (mut close, mut open) = (false, false);
+        let name = std::path::Path::new(&pv.path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| pv.path.clone());
+        let size = std::fs::metadata(&pv.path).map(|m| fmt_size(m.len())).unwrap_or_default();
+        let what = match pv.kind {
+            Kind::Image => tr("Picture"),
+            Kind::Video => tr("Video, one frame"),
+            Kind::Text => tr("Text"),
+        };
+        let bd = modal_frame(ctx, self.modal_opened, Vec2::new(980.0, 780.0), &theme, |ui, card| {
+            title(ui, card, &name, Some(&format!("{what} · {size}")), &theme);
+            close = close_button(ui, card, &theme);
+            let body = Rect::from_min_max(Pos2::new(card.left() + 20.0, card.top() + 86.0), Pos2::new(card.right() - 20.0, card.bottom() - 66.0));
+            let p = ui.painter().with_clip_rect(body.intersect(ui.clip_rect()));
+            p.rect_filled(body, cr(10.0), with_alpha(theme.bg_bottom, 0.8));
+            match &pv.shown {
+                Shown::Loading => {
+                    p.text(body.center(), Align2::CENTER_CENTER, tr("Loading…"), font(13.0), theme.text_faint);
+                }
+                Shown::Failed(e) => {
+                    p.text(body.center(), Align2::CENTER_CENTER, e, font(13.0), theme.text_dim);
+                }
+                Shown::Image(tex) => {
+                    // the picture's own shape, as big as fits but never blown up
+                    let [w, h] = tex.size().map(|x| x as f32 / ui.ctx().pixels_per_point());
+                    let k = (body.width() / w).min(body.height() / h).min(1.0);
+                    let r = Rect::from_center_size(body.center(), Vec2::new(w * k, h * k));
+                    p.image(tex.id(), r, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE);
+                    if pv.kind == Kind::Video {
+                        let c = r.center();
+                        p.circle_filled(c, 26.0, with_alpha(Color32::BLACK, 0.45));
+                        p.circle_stroke(c, 26.0, Stroke::new(1.5, with_alpha(Color32::WHITE, 0.8)));
+                        widgets::draw_icon(&p, Icon::Play, Rect::from_center_size(c + Vec2::new(2.0, 0.0), Vec2::splat(20.0)), Color32::WHITE);
+                    }
+                }
+                Shown::Text(t) => {
+                    let g = p.layout(t.clone(), egui::FontId::monospace(12.5), theme.text, body.width() - 32.0);
+                    let max_scroll = (g.size().y + 32.0 - body.height()).max(0.0);
+                    if ui.rect_contains_pointer(body) {
+                        pv.scroll -= super::app::scroll_delta(ui);
+                    }
+                    pv.scroll = pv.scroll.clamp(0.0, max_scroll);
+                    p.galley(body.left_top() + Vec2::new(16.0, 16.0 - pv.scroll), g, theme.text);
+                }
+            }
+            let b = Rect::from_min_size(Pos2::new(card.right() - 150.0, card.bottom() - 54.0), Vec2::new(122.0, 36.0));
+            open = widgets::button(ui, b, Id::new("preview-open"), tr("Open"), Some(Icon::LinkOut), BtnStyle::Primary, &theme).clicked();
+            let c = Rect::from_min_size(Pos2::new(card.right() - 260.0, card.bottom() - 54.0), Vec2::new(100.0, 36.0));
+            close |= widgets::button(ui, c, Id::new("preview-close"), tr("Close"), None, BtnStyle::Ghost, &theme).clicked();
+        });
+        if open {
+            super::app::os_open(&pv.path, false);
+        }
+        if close || bd {
+            return None;
+        }
+        self.preview = Some(pv);
+        Some(Modal::Preview)
     }
 
     fn settings_modal(&mut self, ctx: &egui::Context) -> Option<Modal> {
@@ -657,7 +738,11 @@ impl App {
                 ui,
                 Pos2::new(x0, y),
                 w,
-                tr("SquirrelDisk installs a tiny agent in ~/.cache/squirreldisk on the server when possible, otherwise it uses find or du. If your key has a passphrase, you'll be asked for it."),
+                if cfg!(target_os = "android") {
+                    tr("Give it as user@host, or user@host -p 2222 for another port. SquirrelDisk signs in with this phone's own key or asks for the password, then lists files with find or du.")
+                } else {
+                    tr("SquirrelDisk installs a tiny agent in ~/.cache/squirreldisk on the server when possible, otherwise it uses find or du. If your key has a passphrase, you'll be asked for it.")
+                },
                 font(11.5),
                 theme.text_faint,
             );
@@ -667,7 +752,7 @@ impl App {
             close |= widgets::button(ui, c, Id::new("ssh-cancel"), tr("Cancel"), None, BtnStyle::Ghost, &theme).clicked();
         });
         if go && !host.trim().is_empty() {
-            let h = host.trim().to_string();
+            let h = crate::scan::remote::destination(&host);
             self.settings.ssh_history.retain(|x| x != &h);
             self.settings.ssh_history.insert(0, h.clone());
             self.settings.ssh_history.truncate(10);
@@ -814,7 +899,7 @@ impl App {
             }
         });
         if browse {
-            if let Some(p) = rfd::FileDialog::new().set_title(tr("Choose where to put the backup")).pick_folder() {
+            if let Some(p) = super::pick::folder(tr("Choose where to put the backup")) {
                 backup_folder = p.to_string_lossy().into_owned();
             }
         }

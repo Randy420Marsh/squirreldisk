@@ -87,6 +87,7 @@ pub fn start(items: Vec<Item>, mode: Mode, source: Source, root_path: String) ->
 /// Moves a file or folder to the Trash, silently. On macOS the Finder way
 /// (the crate's default) plays the trash sound for every single item and
 /// may ask for permission to control Finder; the system call does neither.
+#[cfg(not(target_os = "android"))]
 pub fn to_trash(path: &str) -> Result<(), String> {
     #[allow(unused_mut)]
     let mut ctx = trash::TrashContext::default();
@@ -96,6 +97,12 @@ pub fn to_trash(path: &str) -> Result<(), String> {
         ctx.set_delete_method(DeleteMethod::NsFileManager);
     }
     ctx.delete(path).map_err(|e| e.to_string())
+}
+
+/// Android has no Trash that apps share: nothing is removed.
+#[cfg(target_os = "android")]
+pub fn to_trash(_path: &str) -> Result<(), String> {
+    Err("Android has no Trash: nothing was removed".into())
 }
 
 fn timestamp() -> String {
@@ -136,7 +143,7 @@ fn run(items: &[Item], mode: &Mode, source: &Source, root: &str, p: &DeleteProgr
             let home = run_ssh(host, "echo $HOME").ok().map(|h| h.trim().to_string());
             Rules::for_os(Os::Linux, home.as_deref())
         }
-        Source::Rclone { .. } | Source::Demo => Rules::for_os(Os::Linux, None),
+        Source::Rclone { .. } | Source::Smb { .. } | Source::Demo => Rules::for_os(Os::Linux, None),
     };
     if *source == Source::Demo {
         return simulate(items, mode, p);
@@ -156,7 +163,12 @@ fn run(items: &[Item], mode: &Mode, source: &Source, root: &str, p: &DeleteProgr
         }
         p.set_current(&item.path);
         // Re-check right before acting: the rules are the last line of defence.
-        if !matches!(source, Source::Rclone { .. }) {
+        if let Source::Smb { .. } = source {
+            if smb_rel(&item.path).is_empty() {
+                p.err(format!("{}: refused, the top of a share", item.path));
+                continue;
+            }
+        } else if !matches!(source, Source::Rclone { .. }) {
             if let Verdict::Forbidden(why) = rules.check(&item.path) {
                 p.err(format!("{}: refused, {why}", item.path));
                 continue;
@@ -209,6 +221,10 @@ fn run(items: &[Item], mode: &Mode, source: &Source, root: &str, p: &DeleteProgr
                 (Source::Rclone { .. }, _) => {
                     p.set_phase("Deleting from cloud");
                     rclone_delete(&item.path)?;
+                }
+                (Source::Smb { url }, _) => {
+                    p.set_phase("Deleting on server");
+                    smb_delete(url, &item.path)?;
                 }
                 (Source::Demo, _) => unreachable!("demo deletions are simulated"),
             }
@@ -536,7 +552,64 @@ fn backup_to_folder(source: &Source, path: &str, dest: &Path, p: &DeleteProgress
             let st = c.arg("copyto").arg(path).arg(dest).stdin(Stdio::null()).status().map_err(|e| e.to_string())?;
             if st.success() { Ok(()) } else { Err("rclone backup failed".into()) }
         }
+        Source::Smb { url } => smb_backup(url, path, dest, p),
     }
+}
+
+/// A tree path on a share as the share sees it: no leading slash.
+fn smb_rel(path: &str) -> &str {
+    path.trim_matches('/')
+}
+
+/// Whether `rel` on the share is a folder that isn't a link, and whether it's a folder at all.
+fn smb_kind(c: &mut crate::smb::Conn, rel: &str) -> Result<(bool, bool), crate::smb::Error> {
+    let (parent, name) = rel.rsplit_once('/').unwrap_or(("", rel));
+    match c.list(parent)?.into_iter().find(|e| e.name == name) {
+        Some(e) => Ok((e.dir && !e.link, e.dir)),
+        // STATUS_OBJECT_NAME_NOT_FOUND
+        None => Err(crate::smb::Error::Status(0xC000_0034)),
+    }
+}
+
+fn smb_spec(url: &str) -> Result<crate::smb::Spec, String> {
+    crate::scan::remote::smb_spec(url, "").ok_or_else(|| format!("not a share: {url}"))
+}
+
+fn smb_delete(url: &str, path: &str) -> Result<(), String> {
+    let spec = smb_spec(url)?;
+    let rel = smb_rel(path);
+    crate::smb::with(&spec, |c| {
+        let (tree, dir) = smb_kind(c, rel)?;
+        // a link is deleted itself, never what it points to
+        if tree { c.delete_all(rel, true) } else { c.delete(rel, dir) }
+    })
+    .map_err(|e| e.to_string())
+}
+
+fn smb_backup(url: &str, path: &str, dest: &Path, p: &DeleteProgress) -> Result<(), String> {
+    let spec = smb_spec(url)?;
+    let rel = smb_rel(path);
+    let (tree, _) = crate::smb::with(&spec, |c| smb_kind(c, rel)).map_err(|e| e.to_string())?;
+    if !tree {
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        let mut f = crate::smb::File::open(&spec, rel).map_err(|e| e.to_string())?;
+        let mut out = std::io::BufWriter::new(std::fs::File::create(dest).map_err(|e| format!("{}: {e}", dest.display()))?);
+        let n = f.copy_to(&mut out, &|| p.cancel.load(Ordering::Relaxed))?;
+        std::io::Write::flush(&mut out).map_err(|e| e.to_string())?;
+        p.done_bytes.fetch_add(n, Ordering::Relaxed);
+        return Ok(());
+    }
+    std::fs::create_dir_all(dest).map_err(|e| e.to_string())?;
+    let entries = crate::smb::with(&spec, |c| c.list(rel)).map_err(|e| e.to_string())?;
+    for e in entries {
+        if e.link {
+            continue;
+        }
+        smb_backup(url, &format!("{rel}/{}", e.name), &dest.join(&e.name), p)?;
+    }
+    Ok(())
 }
 
 /// Escapes the characters scp's SFTP mode would expand as a glob.

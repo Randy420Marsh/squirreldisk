@@ -13,6 +13,8 @@ pub enum Location {
     Local,
     Ssh(String),
     Rclone,
+    /// A share, by its smb:// URL; paths are from the top of it.
+    Smb(String),
 }
 
 impl Location {
@@ -21,6 +23,8 @@ impl Location {
             Spec::Local(_) => Location::Local,
             Spec::Ssh { host, .. } => Location::Ssh(host.clone()),
             Spec::Rclone(_) => Location::Rclone,
+            // the share's top: paths are from there, whatever folder was compared
+            Spec::Smb(u) => Location::Smb(crate::smb::Spec::parse(u).map(|s| s.at("").url()).unwrap_or_else(|| u.clone())),
         }
     }
 }
@@ -81,7 +85,9 @@ fn run(batches: &[Batch], permanent: bool, p: &Progress) {
         // never leave a file without a copy: a kept copy on this machine
         // must still be there, unchanged in size
         let local_keeps: Vec<&Target> = b.keep.iter().filter(|k| k.at == Location::Local).collect();
-        let kept_ok = b.keep.iter().any(|k| k.at != Location::Local) || local_keeps.iter().any(|k| std::fs::metadata(&k.path).is_ok_and(|m| m.len() == b.size));
+        // and so must one on a share, which can be asked
+        let checkable = |k: &&Target| matches!(k.at, Location::Local | Location::Smb(_));
+        let kept_ok = b.keep.iter().any(|k| !checkable(&k)) || b.keep.iter().filter(checkable).any(|k| stat(k).is_some_and(|(size, _)| size == b.size));
         if b.keep.is_empty() || !kept_ok {
             let name = b.remove.first().map(|t| t.path.rsplit('/').next().unwrap_or(&t.path).to_string()).unwrap_or_default();
             p.errors.lock().unwrap().push(format!("{name}: the copy to keep is missing, nothing removed"));
@@ -90,8 +96,13 @@ fn run(batches: &[Batch], permanent: bool, p: &Progress) {
         }
         for t in &b.remove {
             let rules = if t.at == Location::Local { &local_rules } else { &remote_rules };
-            let res = if rules.check(&t.path).is_forbidden() {
+            // a share has no system folders: its paths start at the top of the share
+            let res = if !matches!(t.at, Location::Smb(_)) && rules.check(&t.path).is_forbidden() {
                 Err("protected system location".to_string())
+            } else if matches!(t.at, Location::Smb(_)) && stat(t).is_none_or(|(size, mtime)| size != b.size || t.mtime.is_some_and(|m| m != mtime)) {
+                Err("changed since the comparison, left alone".to_string())
+            } else if matches!(t.at, Location::Smb(_)) && b.keep.iter().any(|k| k.at == t.at && k.path.eq_ignore_ascii_case(&t.path)) {
+                Err("same file as the copy kept, left alone".to_string())
             } else if t.at == Location::Local && !unchanged(&t.path, b.size, t.mtime) {
                 Err("changed since the comparison, left alone".to_string())
             } else if t.at == Location::Local && local_keeps.iter().any(|k| same_file(&k.path, &t.path)) {
@@ -129,6 +140,25 @@ fn same_file(a: &str, b: &str) -> bool {
     matches!((std::fs::canonicalize(a), std::fs::canonicalize(b)), (Ok(x), Ok(y)) if x == y)
 }
 
+/// A file's size and modification time, where they can be asked.
+fn stat(t: &Target) -> Option<(u64, i64)> {
+    match &t.at {
+        Location::Local => {
+            let md = std::fs::metadata(&t.path).ok()?;
+            let secs = md.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs() as i64);
+            Some((md.len(), secs.unwrap_or(0)))
+        }
+        Location::Smb(url) => {
+            let spec = crate::smb::Spec::parse(url)?;
+            let rel = t.path.trim_matches('/');
+            let (dir, name) = rel.rsplit_once('/').unwrap_or(("", rel));
+            let list = crate::smb::with(&spec, |c| c.list(dir)).ok()?;
+            list.into_iter().find(|e| !e.dir && e.name.eq_ignore_ascii_case(name)).map(|e| (e.size, e.mtime))
+        }
+        _ => None,
+    }
+}
+
 /// Still the file that was compared: same size, same modification time.
 fn unchanged(path: &str, size: u64, mtime: Option<i64>) -> bool {
     let Ok(md) = std::fs::symlink_metadata(path) else { return false };
@@ -153,6 +183,10 @@ fn remove(t: &Target, permanent: bool) -> Result<(), String> {
                 .status()
                 .map_err(|e| format!("cannot run rclone: {e}"))?;
             if st.success() { Ok(()) } else { Err("rclone could not delete it".into()) }
+        }
+        Location::Smb(url) => {
+            let spec = crate::smb::Spec::parse(url).ok_or_else(|| format!("not a share: {url}"))?;
+            crate::smb::with(&spec, |c| c.delete(t.path.trim_matches('/'), false)).map_err(|e| e.to_string())
         }
     }
 }

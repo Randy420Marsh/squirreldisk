@@ -7,11 +7,17 @@ license = "AGPL-3.0-only"
 repository = "https://github.com/Randy420Marsh/squirreldisk"
 # Modified fork of https://github.com/adileo/squirreldisk (see NOTICE.md)
 
+# Android loads the app as a library (src/lib.rs, scripts/build-android.sh,
+# which builds it as a cdylib); on the desktop it is empty
+[lib]
+name = "squirreldisk_android"
+path = "src/lib.rs"
+
 [features]
 default = ["gui"]
 # Everything needed for the desktop app. Build with --no-default-features
 # to get the tiny headless agent used on remote servers.
-gui = ["dep:eframe", "dep:egui_glow", "dep:notify", "dep:sysinfo", "dep:rodio", "dep:rfd", "dep:tiny-skia", "dep:skrifa", "dep:x11-dl", "dep:raw-window-handle", "dep:winit"]
+gui = ["dep:eframe", "dep:egui_glow", "dep:notify", "dep:sysinfo", "dep:rodio", "dep:rfd", "dep:tiny-skia", "dep:skrifa", "dep:x11-dl", "dep:raw-window-handle", "dep:winit", "dep:image"]
 
 [dependencies]
 eframe = { optional = true, version = "0.36", default-features = false, features = ["glow", "default_fonts", "wayland", "x11"] }
@@ -20,18 +26,29 @@ egui_glow = { version = "0.36", optional = true }
 # (GNOME): winit's own, drawn with ab_glyph, so no extra system libraries
 winit = { version = "0.30", optional = true, default-features = false, features = ["wayland-csd-adwaita"] }
 notify = { optional = true, version = "8", default-features = false, features = ["macos_fsevent"] }
-trash = "5"
 sysinfo = { optional = true, version = "0.39", default-features = false, features = ["disk"] }
 rodio = { optional = true, version = "0.22", default-features = false, features = ["playback"] }
-rfd = { optional = true, version = "0.17", default-features = false, features = ["xdg-portal"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # the font reader egui itself uses: same version, so nothing extra is built
 skrifa = { version = "0.44", optional = true, default-features = false, features = ["std"] }
 tiny-skia = { version = "0.12", optional = true, default-features = false, features = ["std", "simd", "png-format"] }
+# previews (src/ui/preview.rs): its own Rust decoders, only these formats;
+# already used by the clipboard on the desktop
+image = { version = "0.25", optional = true, default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
 xxhash-rust = { version = "0.8.19", features = ["xxh3"] }
 md-5 = "0.11.0"
 sha1 = "0.11.0"
+# SMB file shares (src/smb): NTLMv2 sign-in, SMB 2 signing, SMB 3 signing and
+# encryption; the client itself is the app's own
+md4 = "0.11.0"
+hmac = "0.13.0"
+sha2 = "0.11.1"
+aes = "0.9.3"
+cmac = "0.8.0"
+ccm = "0.6.1"
+aes-gcm = { version = "0.11.1", default-features = false, features = ["aes"] }
+getrandom = "0.3.4"
 
 [target.'cfg(windows)'.build-dependencies]
 embed-resource = "3"
@@ -39,6 +56,21 @@ embed-resource = "3"
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem", "Win32_NetworkManagement_WNet", "Win32_Foundation", "Win32_Globalization", "Win32_Graphics_Gdi", "Win32_UI_HiDpi", "Win32_UI_WindowsAndMessaging", "Win32_System_Registry", "Win32_Security"] }
 raw-window-handle = "0.6"
+
+# native folder dialogs and the Trash; Android has neither (see ui::pick
+# and delete::to_trash)
+[target.'cfg(not(target_os = "android"))'.dependencies]
+rfd = { optional = true, version = "0.17", default-features = false, features = ["xdg-portal"] }
+trash = "5"
+
+# Android has no ssh program: the app's own executable is its SSH client
+# there (src/sshc.rs)
+[target.'cfg(target_os = "android")'.dependencies]
+eframe = { version = "0.36", optional = true, default-features = false, features = ["android-native-activity"] }
+russh = { version = "0.64", default-features = false, features = ["ring", "flate2", "rsa"] }
+tokio = { version = "1", default-features = false, features = ["rt", "net", "time", "io-util", "io-std"] }
+# asks for "All files access" (src/android.rs); already used by winit
+jni = "0.21"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

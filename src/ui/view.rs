@@ -134,51 +134,75 @@ impl App {
         }
         x += nav + 12.0;
 
-        // breadcrumb: ghost links
-        let crumbs: Vec<(String, Option<View>)> = {
+        // breadcrumb: ghost links, the view in bold, and the folders below it
+        // that were visited faint, to go back down to
+        let (crumbs, cur): (Vec<(String, Option<View>)>, usize) = {
+            let trail = self.sessions[si].trail();
             let s = &self.sessions[si];
             let t = s.tree.read().unwrap();
             let mut v: Vec<(String, Option<View>)> = vec![(tr("Disks").into(), None)];
-            for id in t.ancestry(s.view.node) {
+            let mut cur = 0;
+            for id in trail {
                 let name = if id == t.root { s.title.clone() } else { node_label(&t, id) };
                 v.push((name, Some(View::node(id))));
+                if id == s.view.node {
+                    cur = v.len() - 1;
+                }
             }
             if s.view.skip > 0 {
                 v.push((view_label(&t, s.view), Some(s.view)));
+                cur = v.len() - 1;
             }
-            v
+            (v, cur)
         };
         let f_link = font(13.0);
         let f_last = bold(13.0);
         let right_limit = bar.right() - 90.0;
-        let mut shown = crumbs.clone();
+        let mut shown = crumbs;
+        let mut cur = cur;
         let widths = |v: &Vec<(String, Option<View>)>, p: &egui::Painter| -> f32 {
             v.iter().map(|(n, _)| p.layout_no_wrap(n.clone(), bold(13.0), Color32::WHITE).size().x.min(200.0) + 30.0).sum()
         };
-        while shown.len() > 3 && x + widths(&shown, ui.painter()) > right_limit {
+        // short of room, the deepest visited folders go first (but the one
+        // just below the view), then the ones above the view
+        while shown.len() > cur + 2 && x + widths(&shown, ui.painter()) > right_limit {
+            shown.pop();
+        }
+        while cur > 2 && x + widths(&shown, ui.painter()) > right_limit {
             if shown[1].0 == "\u{2026}" {
                 shown.remove(2);
+                cur -= 1;
             } else {
                 shown[1] = ("\u{2026}".into(), shown[1].1);
             }
         }
+        if shown.len() > cur + 1 && x + widths(&shown, ui.painter()) > right_limit {
+            shown.truncate(cur + 1);
+        }
         let n = shown.len();
         for (k, (name, target)) in shown.into_iter().enumerate() {
-            let last = k + 1 == n;
-            let fnt = if last { f_last.clone() } else { f_link.clone() };
+            let here = k == cur;
+            let below = k > cur;
+            let fnt = if here { f_last.clone() } else { f_link.clone() };
             let label = widgets::truncate(ui.painter(), &name, &fnt, 200.0);
             let tw = ui.painter().layout_no_wrap(label.clone(), fnt.clone(), Color32::WHITE).size().x;
             let r = Rect::from_min_size(Pos2::new(x, cy - 11.0), Vec2::new(tw + 12.0, 22.0));
             let id = Id::new(("crumb", k));
-            let resp = ui.interact(r, id, if last { Sense::hover() } else { Sense::click() });
-            let h = ui.ctx().animate_bool_with_time(id.with("h"), resp.hovered() && !last, 0.1);
+            let resp = ui.interact(r, id, if here { Sense::hover() } else { Sense::click() });
+            let h = ui.ctx().animate_bool_with_time(id.with("h"), resp.hovered() && !here, 0.1);
             let p = ui.painter();
             if h > 0.0 {
                 p.rect_filled(r, cr(5.0), with_alpha(theme.surface_hi, 0.7 * h));
             }
-            let col = if last { theme.text } else { lerp_color(theme.text_dim, theme.text, h) };
+            let col = if here {
+                theme.text
+            } else if below {
+                lerp_color(theme.text_faint, theme.text_dim, h)
+            } else {
+                lerp_color(theme.text_dim, theme.text, h)
+            };
             p.text(Pos2::new(r.left() + 6.0, cy), Align2::LEFT_CENTER, &label, fnt, col);
-            if resp.hovered() && !last {
+            if resp.hovered() && !here {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
             }
             if resp.clicked() {
@@ -186,10 +210,10 @@ impl App {
                     None => self.screen = Screen::Home,
                     Some(v) => self.sessions[si].navigate(v),
                 }
-                self.sfx(Sfx::BlipDown);
+                self.sfx(if below { Sfx::Blip } else { Sfx::BlipDown });
             }
             x += r.width();
-            if !last {
+            if k + 1 < n {
                 ui.painter().text(Pos2::new(x + 4.0, cy), Align2::CENTER_CENTER, "/", font(13.0), theme.text_faint);
                 x += 8.0;
             }
@@ -291,18 +315,17 @@ impl App {
         if hit.is_some() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
-        if resp.clicked() {
+        // a press held to pick something up is no click
+        let picked = self.drag.is_some();
+        if resp.clicked() && !picked {
             if let Some(a) = hit.clone() {
                 self.chart_click(si, &a);
             }
         }
-        if resp.double_clicked() {
+        if resp.double_clicked() && !picked {
             if let Some(a) = &hit {
                 if matches!(a.kind, SegKind::Node(Kind::File)) {
-                    let path = self.sessions[si].tree.read().unwrap().path(a.node);
-                    if self.sessions[si].source().is_local() && super::app::os_open(&path, false) {
-                        self.toasts.push(tr("Programs and scripts are shown in the file manager, not run").into(), self.theme.accent);
-                    }
+                    self.open_file(ui.ctx(), si, a.node);
                 }
             }
         }
@@ -313,9 +336,8 @@ impl App {
                 }
             }
         }
-        if resp.drag_started() && self.drag.is_none() {
-            let origin = ui.ctx().input(|i| i.pointer.press_origin());
-            if let Some(o) = origin {
+        if self.drag.is_none() {
+            if let Some(o) = widgets::held(ui, &resp, &theme) {
                 let a = self.sessions[si].anim.hit(&geo, o).cloned();
                 if let Some(a) = a {
                     if let SegKind::Node(k) = a.kind {
@@ -391,6 +413,7 @@ impl App {
         let view = s.view;
         let center_label = view_label(&t, view);
         let center_size = sunburst::view_size(&t, view);
+        let center_freed = s.collected_in(&t, view.node);
         let hovered_label = hovered_anim.as_ref().map(|a| match a.kind {
             SegKind::Group { count, .. } => (trf("{count} smaller items", &[("count", &fmt_count(count as u64))]), a.size),
             SegKind::Free => (tr("Free space").to_string(), a.size),
@@ -420,14 +443,20 @@ impl App {
         let p = ui.painter();
         let r0 = geo.r0;
         let _ = center_anim_color;
-        let (title, size) = hovered_label.unwrap_or((center_label, center_size));
+        let (title, size) = hovered_label.clone().unwrap_or((center_label, center_size));
         let size_txt = fmt_size(size);
-        let fs = (r0 * 0.42).clamp(14.0, 34.0);
-        let g = p.layout_no_wrap(size_txt.clone(), display(fs), theme.text);
-        let fs = if g.size().x > r0 * 1.7 { fs * r0 * 1.7 / g.size().x } else { fs };
-        p.text(geo.center - Vec2::new(0.0, fs * 0.22), Align2::CENTER_CENTER, size_txt, display(fs), theme.text);
+        // The size counts up while scanning: steady digits, and the lines
+        // placed for the full font size so a shrunk number moves nothing.
+        let fs0 = (r0 * 0.42).clamp(14.0, 34.0);
+        let w = widgets::steady_width(p, &size_txt, &display(fs0));
+        let fs = if w > r0 * 1.7 { fs0 * r0 * 1.7 / w } else { fs0 };
+        widgets::steady_text(p, geo.center - Vec2::new(0.0, fs0 * 0.22), &size_txt, display(fs), theme.text);
         let name = widgets::truncate(p, &title, &font(12.0), r0 * 1.6);
-        p.text(geo.center + Vec2::new(0.0, fs * 0.55), Align2::CENTER_CENTER, name, font(12.0), theme.text_dim);
+        p.text(geo.center + Vec2::new(0.0, fs0 * 0.55), Align2::CENTER_CENTER, name, font(12.0), theme.text_dim);
+        // what deleting the collected items would take off this folder
+        if hovered_label.is_none() && center_freed > 0 && r0 > 44.0 {
+            p.text(geo.center + Vec2::new(0.0, fs0 * 0.55 + 15.0), Align2::CENTER_CENTER, format!("\u{2212}{}", fmt_size(center_freed)), bold(11.0), theme.warn);
+        }
 
         // --- scan status
         let s = &self.sessions[si];
@@ -468,12 +497,12 @@ impl App {
             Some(f) => trf("{status} · {percent}% · {files} files · {size}", &[("status", &tr_status(&status)), ("percent", &format!("{:.0}", f * 100.0)), ("files", &crate::tree::fmt_count_compact(files)), ("size", &fmt_size(bytes))]),
             None => trf("{status} · {files} files · {size}", &[("status", &tr_status(&status)), ("files", &crate::tree::fmt_count_compact(files)), ("size", &fmt_size(bytes))]),
         };
-        let g = p.layout_no_wrap(txt.clone(), bold(12.0), theme.text);
-        let pill = Rect::from_center_size(Pos2::new(chart.center().x, chart.top() + 18.0), Vec2::new(g.size().x + 40.0, 30.0));
+        let tw = widgets::steady_width(p, &txt, &bold(12.0));
+        let pill = Rect::from_center_size(Pos2::new(chart.center().x, chart.top() + 18.0), Vec2::new(tw + 40.0, 30.0));
         widgets::shadow(p, pill, 8.0, 0.6, theme);
         p.rect_filled(pill, cr(8.0), with_alpha(theme.surface_hi, 0.95));
         p.circle_filled(Pos2::new(pill.left() + 16.0, pill.center().y), 3.5, with_alpha(theme.accent2, 0.6 + 0.4 * (self.time as f32 * 4.0).sin().abs()));
-        p.galley(Pos2::new(pill.left() + 26.0, pill.center().y - g.size().y / 2.0), g, theme.text);
+        widgets::steady_text(p, Pos2::new(pill.left() + 26.0 + tw / 2.0, pill.center().y), &txt, bold(12.0), theme.text);
         // Only surface a path when a folder is blocking us (network mount, huge dir…).
         if let Some((cur, secs)) = pr.stuck(10.0) {
             let c = widgets::truncate(p, &trf("Still reading {path} ({seconds}s)", &[("path", &cur), ("seconds", &format!("{secs:.0}"))]), &font(11.0), chart.width() - 60.0);
@@ -532,7 +561,7 @@ impl App {
             }
             (node_label(&t, node), t.get(node).size)
         };
-        self.drag = Some(Drag { session: si, node, label, size, color, pos: at, vel: Vec2::ZERO, over_bin: false, started: Instant::now() });
+        self.drag = Some(Drag { session: si, node, label, size, color, pos: at, origin: at, moved: false, vel: Vec2::ZERO, over_bin: false, started: Instant::now() });
         self.sfx(Sfx::Pick);
     }
 
@@ -573,7 +602,14 @@ impl App {
         // live counts change fast: keep them compact until the scan is done
         let count = |n: u64| if s.is_scanning() { crate::tree::fmt_count_compact(n) } else { fmt_count(n) };
         let sub = trf("{files} files · {items} items", &[("files", &count(files as u64)), ("items", &count(kids.len() as u64))]);
+        let freed = s.collected_in(&t, pv.node);
+        let freed_txt = (freed > 0).then(|| trf("{size} to free", &[("size", &fmt_size(freed))]));
+        let fw = freed_txt.as_ref().map_or(0.0, |f| p.layout_no_wrap(f.clone(), font(12.0), theme.warn).size().x + 12.0);
+        let sub = widgets::truncate(&p, &sub, &font(12.0), inner.width() - fw);
         p.text(inner.left_top() + Vec2::new(0.0, 32.0), Align2::LEFT_TOP, sub, font(12.0), theme.text_faint);
+        if let Some(f) = freed_txt {
+            p.text(Pos2::new(inner.right(), inner.top() + 32.0), Align2::RIGHT_TOP, f, font(12.0), theme.warn);
+        }
 
         // hidden space: say what it is
         let mut note_h = 0.0;
@@ -663,9 +699,10 @@ impl App {
                 widgets::draw_icon(p, Icon::Acorn, Rect::from_center_size(Pos2::new(rr.right() - 16.0 - sw - 14.0, rr.center().y - 1.0), Vec2::splat(12.0)), theme.warn);
             }
             p.text(Pos2::new(rr.right() - 12.0, rr.center().y - 1.0), Align2::RIGHT_CENTER, sz, bold(12.5), lerp_color(theme.text_dim, theme.text, h));
-            if resp.drag_started() && !matches!(r.kind, Kind::Hidden | Kind::Mount) {
-                let at = resp.interact_pointer_pos().unwrap_or(rr.center());
+            let held = if self.drag.is_none() && !matches!(r.kind, Kind::Hidden | Kind::Mount) { widgets::held(ui, &resp, &theme) } else { None };
+            if let Some(at) = held {
                 self.begin_drag(si, r.node, r.color, at);
+            } else if self.drag.is_some() {
             } else if resp.double_clicked() {
                 action = Some((r.node, r.kind, 1));
             } else if resp.clicked() {
@@ -726,12 +763,7 @@ impl App {
                     self.sfx(Sfx::Blip);
                 }
                 (0, Kind::SmallFiles) => self.expand(si, node),
-                (1, Kind::File) => {
-                    let path = s.tree.read().unwrap().path(node);
-                    if s.source().is_local() && super::app::os_open(&path, false) {
-                        self.toasts.push(tr("Programs and scripts are shown in the file manager, not run").into(), self.theme.accent);
-                    }
-                }
+                (1, Kind::File) => self.open_file(ui.ctx(), si, node),
                 _ => {}
             }
         }
@@ -766,12 +798,23 @@ impl App {
         p.rect_stroke(r, cr(12.0), Stroke::new(1.0 + dg, border), egui::StrokeKind::Inside);
         let tx = r.left() + 20.0;
         if count == 0 {
-            let msg = if dragging { tr("Drop here to collect") } else { tr("Drag slices or rows here to collect them") };
-            let m = widgets::truncate(p, msg, &font(12.5), r.width() - 150.0);
+            let room = r.width() - 150.0;
+            let msg = if dragging {
+                tr("Drop here to collect")
+            } else {
+                let long = tr("Hold a slice or row, then drop it here to collect it");
+                if p.layout_no_wrap(long.to_string(), font(12.5), theme.text).size().x <= room { long } else { tr("Hold, then drop here") }
+            };
+            let m = widgets::truncate(p, msg, &font(12.5), room);
             p.text(Pos2::new(tx, r.center().y), Align2::LEFT_CENTER, m, font(12.5), if dragging { theme.warn } else { theme.text_dim });
         } else {
             p.text(Pos2::new(tx, r.center().y - 8.0), Align2::LEFT_CENTER, fmt_size(size), display(16.0), theme.text);
-            p.text(Pos2::new(tx, r.center().y + 11.0), Align2::LEFT_CENTER, if count == 1 { tr("collected · 1 item").to_string() } else { trf("collected · {count} items", &[("count", &count)]) }, font(11.5), theme.text_dim);
+            let what = if count == 1 { tr("collected · 1 item").to_string() } else { trf("collected · {count} items", &[("count", &count)]) };
+            // a disk: how much will be free once they are gone
+            let free = self.sessions[si].free_space;
+            let what = if free > 0 { format!("{what} · {}", trf("{size} free after", &[("size", &fmt_size(free + size))])) } else { what };
+            let what = widgets::truncate(p, &what, &font(11.5), r.width() - 150.0);
+            p.text(Pos2::new(tx, r.center().y + 11.0), Align2::LEFT_CENTER, what, font(11.5), theme.text_dim);
         }
         let btn = Rect::from_min_size(Pos2::new(r.right() - 112.0, r.center().y - 16.0), Vec2::new(100.0, 32.0));
         let del = widgets::button_ex(ui, btn, id.with("del"), tr("Delete"), Some(Icon::Trash), BtnStyle::Danger, &theme, count > 0 && !deleting);
@@ -863,7 +906,12 @@ impl App {
             .filter(|n| t.is_alive(**n))
             .map(|n| {
                 let path = t.path(*n);
-                let verdict = if is_rclone { crate::safety::Verdict::Ok } else { rules.check(&path) };
+                let verdict = match &t.source {
+                    crate::tree::Source::Smb { .. } if path.trim_matches('/').is_empty() => crate::safety::Verdict::Forbidden("the top of a share".into()),
+                    crate::tree::Source::Smb { .. } => crate::safety::Verdict::Ok,
+                    _ if is_rclone => crate::safety::Verdict::Ok,
+                    _ => rules.check(&path),
+                };
                 DeleteItem { node: *n, name: node_label(&t, *n), size: t.get(*n).size, path, verdict }
             })
             .collect();
@@ -897,11 +945,22 @@ impl App {
         }
         // hidden space is in no file or folder: nothing to open, no path
         if kind != Kind::Hidden {
+            if local && kind == Kind::File {
+                if self.sniffed.as_ref().is_none_or(|(p, _)| *p != path) {
+                    self.sniffed = Some((path.clone(), super::preview::sniff(std::path::Path::new(&path))));
+                }
+                if self.sniffed.as_ref().is_some_and(|(_, k)| k.is_some()) {
+                    items.push((tr("Preview"), Icon::Eye, 5));
+                }
+            }
             if local && kind != Kind::SmallFiles {
                 items.push((tr("Open"), Icon::File, 1));
                 items.push((if cfg!(target_os = "macos") { tr("Reveal in Finder") } else { tr("Show in file manager") }, Icon::Folder, 2));
             }
             items.push((tr("Copy path"), Icon::File, 3));
+            if local && kind == Kind::Dir {
+                items.push((tr("Find duplicates here"), Icon::Copies, 6));
+            }
         }
         if !matches!(kind, Kind::Hidden | Kind::Mount) {
             items.push((tr("Collect for deletion"), Icon::Acorn, 4));
@@ -960,6 +1019,17 @@ impl App {
                 3 => {
                     ctx.copy_text(path);
                     self.toasts.push(tr("Path copied").into(), theme.accent);
+                }
+                5 => {
+                    if let Some((p, Some(k))) = self.sniffed.clone() {
+                        self.open_preview(ctx, p, k);
+                    }
+                }
+                6 => {
+                    self.open_dupes();
+                    if let Some(d) = self.dupes.as_mut() {
+                        d.add_place(super::dupes::place_for(&super::app::Target::Folder(path.into())));
+                    }
                 }
                 4 if self.sessions[si].collect(node) => {
                     self.sfx(Sfx::Plop);

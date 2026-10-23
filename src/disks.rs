@@ -45,6 +45,9 @@ pub fn list() -> Vec<Volume> {
             })
             .collect();
     }
+    #[cfg(target_os = "android")]
+    return android();
+    #[cfg_attr(target_os = "android", allow(unreachable_code))]
     let disks = Disks::new_with_refreshed_list();
     let mut out: Vec<Volume> = Vec::new();
     for d in disks.list() {
@@ -92,6 +95,28 @@ pub fn list() -> Vec<Volume> {
         out.push(Volume { name, mount, total, available, removable: false, fs, is_boot: false, network: true });
     }
     out.sort_by_key(|v| (!v.is_boot, v.network, v.removable, v.mount.clone()));
+    out
+}
+
+/// Android: the phone's shared storage and each SD card or USB drive (as
+/// /storage/XXXX-XXXX). The other mounts are the system's own, which apps
+/// can't read; asking about them is refused (and logged) anyway.
+#[cfg(target_os = "android")]
+fn android() -> Vec<Volume> {
+    let volume = |name: String, mount: String, is_boot: bool| {
+        let (total, available) = crate::scan::platform::volume_space(std::path::Path::new(&mount))?;
+        Some(Volume { name, mount, total, available, removable: !is_boot, fs: String::new(), is_boot, network: false })
+    };
+    let mut out: Vec<Volume> = volume(crate::i18n::tr("Phone storage").into(), crate::android::SHARED_STORAGE.into(), true).into_iter().collect();
+    let mut cards: Vec<String> = std::fs::read_dir("/storage")
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n != "emulated" && n != "self")
+        .collect();
+    cards.sort();
+    out.extend(cards.into_iter().filter_map(|n| volume(n.clone(), format!("/storage/{n}"), false)));
     out
 }
 

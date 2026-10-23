@@ -25,6 +25,8 @@ pub enum Target {
     Folder(PathBuf),
     Ssh { host: String, path: String },
     Rclone(String),
+    /// An SMB share, by its smb:// URL.
+    Smb(String),
 }
 
 impl Target {
@@ -34,6 +36,7 @@ impl Target {
             Target::Folder(p) => p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| p.to_string_lossy().into_owned()),
             Target::Ssh { host, path } => format!("{host}:{path}"),
             Target::Rclone(r) => r.clone(),
+            Target::Smb(u) => crate::smb::Spec::parse(u).map(|s| s.display()).unwrap_or_else(|| u.clone()),
         }
     }
     pub fn same_place(&self, other: &Target) -> bool {
@@ -52,6 +55,10 @@ pub struct Session {
     pub view: View,
     pub back: Vec<View>,
     pub fwd: Vec<View>,
+    /// The deepest folder visited on the current path: the breadcrumb keeps
+    /// showing the folders below the view down to it, until the view moves
+    /// off that path (see [`trail_tip`]).
+    pub trail: u32,
     pub anim: Animator,
     pub treemap: super::treemap::TreemapState,
     pub layout_sig: (u64, View, usize, i32, String),
@@ -84,6 +91,16 @@ pub struct Session {
     pub name_scripts: u32,
 }
 
+/// Where the trail ends once the view is `view`: where it did, while the
+/// view is on the way down to it; at the view, once it went elsewhere.
+pub fn trail_tip(t: &crate::tree::Tree, tip: u32, view: View) -> u32 {
+    if view.skip == 0 && tip != view.node && t.is_alive(tip) && t.ancestry(tip).contains(&view.node) {
+        tip
+    } else {
+        view.node
+    }
+}
+
 impl Session {
     pub fn new(target: Target) -> Session {
         let handle = match &target {
@@ -95,6 +112,7 @@ impl Session {
             Target::Folder(p) => scan::local::start(p.clone(), target.title()),
             Target::Ssh { host, path } => scan::remote::start_ssh(host.clone(), path.clone()),
             Target::Rclone(r) => scan::remote::start_rclone(r.clone()),
+            Target::Smb(u) => scan::remote::start_smb(u.clone()),
         };
         let root = View::node(0);
         Session {
@@ -105,6 +123,7 @@ impl Session {
             view: root,
             back: Vec::new(),
             fwd: Vec::new(),
+            trail: 0,
             anim: Animator::default(),
             treemap: Default::default(),
             layout_sig: (0, root, 0, 0, String::new()),
@@ -178,6 +197,14 @@ impl Session {
         }
     }
 
+    /// The folders from the top down to the trail's tip, after bringing the
+    /// tip up to date with the view.
+    pub fn trail(&mut self) -> Vec<u32> {
+        let t = self.tree.read().unwrap();
+        self.trail = trail_tip(&t, self.trail, self.view);
+        t.ancestry(self.trail)
+    }
+
     pub fn go_up(&mut self) -> bool {
         let t = self.tree.read().unwrap();
         let parent = if self.view.skip > 0 { self.view.node } else { t.get(self.view.node).parent };
@@ -212,6 +239,11 @@ impl Session {
     pub fn collected_size(&self) -> u64 {
         let t = self.tree.read().unwrap();
         self.collector.iter().filter(|c| t.is_alive(**c)).map(|c| t.get(*c).size).sum()
+    }
+
+    /// What the collected items take up inside `node` (or `node` itself).
+    pub fn collected_in(&self, t: &crate::tree::Tree, node: u32) -> u64 {
+        self.collector.iter().filter(|c| t.is_alive(**c) && (**c == node || t.is_ancestor(node, **c))).map(|c| t.get(*c).size).sum()
     }
 
     pub fn is_collected(&self, t: &crate::tree::Tree, node: u32) -> bool {
@@ -295,6 +327,12 @@ pub enum Modal {
     /// Duplicates: confirm removing the selected copies, then follow it.
     DupesConfirm { ack: bool, permanent: bool },
     DupesRemoving { finished_at: Option<Instant> },
+    /// A picture, a video's frame or a text file (`App::preview`).
+    Preview,
+    /// The app's own folder browser (Android).
+    Folder(Box<super::pick::FolderPick>),
+    /// Scan a Windows (SMB) share.
+    Smb(Box<super::smb::SmbForm>),
 }
 
 /// Drives the animated Dock tile on macOS.
@@ -319,6 +357,8 @@ pub struct App {
     pub theme: Theme,
     pub themes: Vec<Theme>,
     pub sounds: Option<Sounds>,
+    /// Whether a sound was played this frame (so a click doesn't add one).
+    pub played: bool,
     pub gl: Option<Arc<Mutex<SunburstGl>>>,
     pub screen: Screen,
     pub sessions: Vec<Session>,
@@ -339,6 +379,11 @@ pub struct App {
     /// rclone download in progress (Cloud storage dialog).
     pub ssh_hosts: Vec<String>,
     pub ctx_menu: Option<CtxMenu>,
+    /// The file in the preview dialog.
+    pub preview: Option<super::preview::Preview>,
+    /// What preview the file under the context menu can have (its path
+    /// and kind), so its first bytes are read once, not every frame.
+    pub sniffed: Option<(String, Option<super::preview::Kind>)>,
     pub bin_rect: Rect,
     pub bin_open: bool,
     pub bin_bounce: f32,
@@ -534,6 +579,7 @@ impl App {
             themes: theme::all(),
             theme,
             sounds: None,
+            played: false,
             gl,
             screen: Screen::Home,
             sessions: Vec::new(),
@@ -553,6 +599,8 @@ impl App {
             rclone: Arc::new(Mutex::new(RcloneState::Looking)),
             ssh_hosts: Vec::new(),
             ctx_menu: None,
+            preview: None,
+            sniffed: None,
             bin_rect: Rect::NOTHING,
             bin_open: false,
             bin_bounce: 0.0,
@@ -792,6 +840,7 @@ impl App {
     }
 
     pub fn sfx(&mut self, s: Sfx) {
+        self.played = true;
         if self.settings.sound {
             let vol = self.settings.volume;
             if let Some(snd) = self.sounds.as_mut() {
@@ -862,6 +911,7 @@ impl App {
         let mut sounds: Vec<Sfx> = Vec::new();
         let mut toasts: Vec<(String, Color32)> = Vec::new();
         let mut auth_needed: Option<(String, String)> = None;
+        let mut smb_again: Option<super::smb::SmbForm> = None;
         let watch_enabled = self.settings.watch_fs;
         for s in self.sessions.iter_mut() {
             // scan finished?
@@ -870,6 +920,9 @@ impl App {
                 if let Some(e) = s.progress.error.lock().unwrap().clone() {
                     if let (Target::Ssh { host, path }, true) = (&s.target, scan::remote::is_auth_error(&e)) {
                         auth_needed = Some((host.clone(), path.clone()));
+                    } else if let Target::Smb(url) = &s.target {
+                        // the dialog again, saying what went wrong
+                        smb_again = Some(super::smb::SmbForm::again(url, Some(e.clone()), crate::smb::is_auth_error(&e)));
                     } else if e != "cancelled" {
                         toasts.push((format!("{}: {e}", s.title), self.theme.danger));
                         sounds.push(Sfx::Error);
@@ -935,6 +988,10 @@ impl App {
             self.ssh_tried.insert(host.clone());
             self.open_modal(Modal::SshAuth { host, path, secret: String::new(), retry });
         }
+        if let Some(f) = smb_again {
+            self.sfx(Sfx::Error);
+            self.open_modal(Modal::Smb(Box::new(f)));
+        }
         for snd in sounds {
             self.sfx(snd);
         }
@@ -993,6 +1050,7 @@ impl App {
     /// One frame of the whole interface, after the window is placed (what
     /// the layout tests drive, without a window).
     pub fn frame_ui(&mut self, ui: &mut egui::Ui) {
+        self.played = false;
         let ctx = ui.ctx().clone();
         self.auto_scale(&ctx);
 
@@ -1036,6 +1094,8 @@ impl App {
 
         let screen = ctx.content_rect();
         widgets::vgradient(ui.painter(), screen, self.theme.bg_top, self.theme.bg_bottom);
+        #[cfg(target_os = "android")]
+        let screen = crate::android::safe_area(&ctx, screen);
 
         match self.screen {
             Screen::Home => self.home_ui(ui, screen),
@@ -1055,6 +1115,10 @@ impl App {
         let theme = self.theme.clone();
         self.particles.step_and_draw(&ctx, self.dt, &theme);
         self.toasts.draw(&ctx, &theme, self.dt);
+        // every button, toggle and slider clicks, unless it made its own sound
+        if widgets::take_click(&ctx) && !self.played {
+            self.sfx(Sfx::Blip);
+        }
 
         // keyboard shortcuts
         // ⌘, (Ctrl+, elsewhere) opens Settings from anywhere, like every Mac app.
@@ -1063,10 +1127,24 @@ impl App {
             self.ctx_menu = None;
             self.open_modal(Modal::Settings);
         }
-        let (esc, back) = ctx.input(|i| (i.key_pressed(egui::Key::Escape), i.key_pressed(egui::Key::Backspace)));
+        // Android's Back (the gesture or the button) arrives as BrowserBack
+        let (esc, back) = ctx.input(|i| {
+            (i.key_pressed(egui::Key::Escape) || i.key_pressed(egui::Key::BrowserBack), i.key_pressed(egui::Key::Backspace))
+        });
+        #[cfg(target_os = "android")]
+        if esc && self.screen == Screen::Home && self.modal.is_none() && self.ctx_menu.is_none() && self.drag.is_none() {
+            crate::android::to_background();
+        }
         if esc {
             if self.ctx_menu.is_some() {
                 self.ctx_menu = None;
+            } else if let Some(Modal::Folder(f)) = self.modal.as_mut() {
+                // Back goes up a folder, like a file manager's
+                if f.up() {
+                    self.sfx(Sfx::BlipDown);
+                } else {
+                    self.modal = None;
+                }
             } else if self.modal.as_ref().is_some_and(|m| !matches!(m, Modal::Deleting { .. } | Modal::DupesRemoving { .. })) {
                 self.modal = None;
             } else if self.drag.is_some() {
@@ -1222,6 +1300,30 @@ pub fn os_open(path: &str, reveal: bool) -> bool {
     guarded
 }
 
+impl App {
+    /// What a double click on a file does: a preview when it has one (see
+    /// ui::preview), otherwise the file in its own app.
+    pub fn open_file(&mut self, ctx: &egui::Context, si: usize, node: u32) {
+        let Some(s) = self.sessions.get(si) else { return };
+        if !s.source().is_local() {
+            return;
+        }
+        let path = s.tree.read().unwrap().path(node);
+        if let Some(kind) = super::preview::sniff(std::path::Path::new(&path)) {
+            return self.open_preview(ctx, path, kind);
+        }
+        if os_open(&path, false) {
+            self.toasts.push(crate::i18n::tr("Programs and scripts are shown in the file manager, not run").into(), self.theme.accent);
+        }
+    }
+
+    pub fn open_preview(&mut self, ctx: &egui::Context, path: String, kind: super::preview::Kind) {
+        self.preview = Some(super::preview::Preview::start(ctx, path, kind));
+        self.sfx(Sfx::Blip);
+        self.open_modal(Modal::Preview);
+    }
+}
+
 /// Opens a web page in the browser. Only http(s), so it can't run anything.
 pub fn open_url(url: &str) {
     if url.starts_with("https://") || url.starts_with("http://") {
@@ -1230,6 +1332,9 @@ pub fn open_url(url: &str) {
 }
 
 fn os_launch(path: &str, reveal: bool) {
+    #[cfg(target_os = "android")]
+    return crate::android::open(path, reveal);
+    #[cfg_attr(target_os = "android", allow(unreachable_code))]
     let mut cmd;
     #[cfg(target_os = "macos")]
     {
@@ -1299,6 +1404,26 @@ mod layout_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_breadcrumb_keeps_the_way_back_down() {
+        use crate::tree::{Kind, Source, Tree};
+        let mut t = Tree::new("/r", "r", Source::Local);
+        let a = t.add_child(t.root, "a", Kind::Dir, 0, 0);
+        let b = t.add_child(a, "b", Kind::Dir, 0, 0);
+        let c = t.add_child(b, "c", Kind::Dir, 0, 0);
+        let other = t.add_child(t.root, "other", Kind::Dir, 0, 0);
+        // down to c, then back up: c stays the end of the trail
+        let tip = trail_tip(&t, t.root, View::node(c));
+        assert_eq!(tip, c);
+        assert_eq!(trail_tip(&t, tip, View::node(a)), c);
+        assert_eq!(trail_tip(&t, tip, View::node(t.root)), c);
+        assert_eq!(trail_tip(&t, tip, View::node(b)), c);
+        // into another folder: the trail starts over there
+        assert_eq!(trail_tip(&t, tip, View::node(other)), other);
+        // an "other" group is a place of its own
+        assert_eq!(trail_tip(&t, tip, View { node: a, skip: 3 }), a);
+    }
 
     #[test]
     fn interface_scales_with_the_window() {

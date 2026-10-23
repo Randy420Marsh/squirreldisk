@@ -73,8 +73,10 @@ ones:
 | `MARKETING_DEMO=1` | made-up disks and a scan played back from fake data. Delete only pretends. |
 | `SQD_WINDOW=WxH` | start at this size (and skip the automatic placement) |
 | `SQD_SCAN=/` | scan at launch |
-| `SQD_MODAL=settings\|delete\|ssh\|rclone` | open a dialog |
+| `SQD_SCAN=smb://user@host:port/share?v=3&enc=1` with `SQD_SMB_PASSWORD=pw` | scan a share at launch |
+| `SQD_MODAL=settings\|delete\|ssh\|smb\|rclone` | open a dialog |
 | `SQD_SCREEN=dupes` with `SQD_DUPES_PICK=1` | duplicate finder with mock results |
+| `SQD_SCREEN=dupes` with `SQD_DUPES_ADD=1` | duplicate finder with the "Add place" menu open |
 | `SQD_SHOT=prefix`, `SQD_SHOT_AT=3`, `SQD_QUIT=1` | screenshot after 3 s, then quit |
 | `SQD_ZOOM=2` | interface scale |
 | `SQD_FPS=1`, `SQD_FPS_WHY=1` | print frames per second to stderr (and what asked for each frame) |
@@ -92,6 +94,36 @@ Xephyr has no window manager. With `SQD_WINDOW` the app does not place
 itself, so a window at the top left of a test screen is expected there. To
 check placement, run without `SQD_WINDOW` (see BUGS.md, *The window opened
 at the top left*).
+
+### SMB test servers
+
+`src/smb` is the app's own SMB client. To test it against real servers,
+`scripts/smb-test-servers.sh start /tmp/sqs` starts four Samba servers as
+you, on 127.0.0.1 only:
+
+| Port | Server |
+|---|---|
+| 4451 | SMB 1 only |
+| 4452 | SMB 2.0.2 to 2.1 |
+| 4453 | SMB 3 only, encryption required |
+| 4454 | SMB 1 with signing required |
+
+Each has a read-only share `test` and a writable share `rw`. The account is
+your user name with the password `sqdtest`. Keep the folder path short:
+smbd puts its sockets there, and a path over about 60 characters fails
+with "File name too long". Then:
+
+```bash
+SQD_SMB_SHARE=/tmp/sqs/share cargo test smb_ -- --ignored   # all four servers
+SQD_SCAN="smb://$USER@127.0.0.1:4453/test?v=3&enc=1" SQD_SMB_PASSWORD=sqdtest \
+  cargo run --release                                        # the app on one
+```
+
+For screenshots of a share, run `scripts/test-screen.sh` with
+`TEST_SCREEN_DEMO=` (empty) so it uses real data instead of the demo.
+`SQD_COLLECT=1 SQD_AUTODELETE=1` deletes over SMB, but only in a folder
+whose path contains `sqd-fake`. Stop the servers with
+`scripts/smb-test-servers.sh stop /tmp/sqs` when you're done.
 
 ### Frame rate
 
@@ -170,6 +202,15 @@ Done, release 2.6.2:
   menu entry, Wayland title bar and the AppImage fixes in BUGS.md; frame
   rate capped and idle windows idle; screenshots and GIFs recreated.
 
+- Windows shares over SMB 1, 2 and 3 with the app's own client
+  (`src/smb`): NTLMv2 sign-in, signing, and SMB 3 encryption (AES-CCM and
+  AES-GCM). Scans, deletes, previews and the duplicate finder all work on
+  shares. Tested against `scripts/smb-test-servers.sh`.
+- Previews of pictures, text and video frames; Open and Show folder; a
+  folder picker of the app's own; hold-to-pick-up on touch screens.
+- An Android build (arm64, API 36, `scripts/build-android.sh`), not yet in
+  CI or the release. It has no Trash and no rclone, and SSH uses the app's
+  own client (`src/sshc.rs`) with no agent upload.
+
 Planned:
-- An Android build (arm64, API 36). This is exploratory: the file pickers,
-  trash, SSH, rclone and desktop integration would have to be left out.
+- The Wayland title bar check on more compositors.

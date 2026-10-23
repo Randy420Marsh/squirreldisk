@@ -114,21 +114,59 @@ impl Hasher {
     }
 }
 
+/// Something to fingerprint: a local file, or one on a file share.
+pub trait ReadAt {
+    fn len(&mut self) -> Result<u64, String>;
+    /// Reads at `offset`; 0 at the end.
+    fn read_at(&mut self, buf: &mut [u8], offset: u64) -> Result<usize, String>;
+}
+
+impl ReadAt for std::fs::File {
+    fn len(&mut self) -> Result<u64, String> {
+        self.metadata().map(|m| m.len()).map_err(|e| e.to_string())
+    }
+    fn read_at(&mut self, buf: &mut [u8], offset: u64) -> Result<usize, String> {
+        self.seek(SeekFrom::Start(offset)).map_err(|e| e.to_string())?;
+        self.read(buf).map_err(|e| e.to_string())
+    }
+}
+
+fn read_exact_at(f: &mut dyn ReadAt, mut buf: &mut [u8], mut offset: u64) -> Result<(), String> {
+    while !buf.is_empty() {
+        let n = f.read_at(buf, offset)?;
+        if n == 0 {
+            return Err("changed while comparing".into());
+        }
+        buf = &mut buf[n..];
+        offset += n as u64;
+    }
+    Ok(())
+}
+
 /// Fingerprints `path`, which must still be `size` bytes long. `read` counts
 /// the bytes read as they go; `cancel` stops it.
 pub fn file(path: &Path, kind: Kind, size: u64, cancel: &AtomicBool, read: &AtomicU64) -> Result<Vec<u8>, String> {
     let mut f = std::fs::File::open(path).map_err(|e| e.to_string())?;
-    let len = f.metadata().map_err(|e| e.to_string())?.len();
-    if len != size {
+    // big files: read past the cache, they would only push out what is useful
+    #[cfg(target_os = "macos")]
+    if size > 32 << 20 {
+        use std::os::unix::io::AsRawFd;
+        unsafe { libc::fcntl(f.as_raw_fd(), libc::F_NOCACHE, 1) };
+    }
+    of(&mut f, kind, size, cancel, read)
+}
+
+/// Fingerprints what `f` reads, as [`file`] does.
+pub fn of(f: &mut dyn ReadAt, kind: Kind, size: u64, cancel: &AtomicBool, read: &AtomicU64) -> Result<Vec<u8>, String> {
+    if f.len()? != size {
         return Err("changed while comparing".into());
     }
     let mut h = Hasher::new(kind);
     if kind == Kind::Partial && size > 2 * PART {
         let mut buf = vec![0u8; PART as usize];
-        f.read_exact(&mut buf).map_err(|e| e.to_string())?;
+        read_exact_at(f, &mut buf, 0)?;
         h.update(&buf);
-        f.seek(SeekFrom::End(-(PART as i64))).map_err(|e| e.to_string())?;
-        f.read_exact(&mut buf).map_err(|e| e.to_string())?;
+        read_exact_at(f, &mut buf, size - PART)?;
         h.update(&buf);
         h.update(&size.to_le_bytes());
         read.fetch_add(2 * PART, Ordering::Relaxed);
@@ -136,7 +174,7 @@ pub fn file(path: &Path, kind: Kind, size: u64, cancel: &AtomicBool, read: &Atom
     }
     if kind == Kind::Sample && size > SAMPLE_WHOLE {
         let mut buf = vec![0u8; PART as usize];
-        f.read_exact(&mut buf).map_err(|e| e.to_string())?;
+        read_exact_at(f, &mut buf, 0)?;
         h.update(&buf);
         let n = spots(size);
         let mut chunk = vec![0u8; CHUNK as usize];
@@ -145,22 +183,14 @@ pub fn file(path: &Path, kind: Kind, size: u64, cancel: &AtomicBool, read: &Atom
                 return Err("cancelled".into());
             }
             let at = (size - CHUNK) * i / (n + 1);
-            f.seek(SeekFrom::Start(at)).map_err(|e| e.to_string())?;
-            f.read_exact(&mut chunk).map_err(|e| e.to_string())?;
+            read_exact_at(f, &mut chunk, at)?;
             h.update(&chunk);
         }
-        f.seek(SeekFrom::End(-(PART as i64))).map_err(|e| e.to_string())?;
-        f.read_exact(&mut buf).map_err(|e| e.to_string())?;
+        read_exact_at(f, &mut buf, size - PART)?;
         h.update(&buf);
         h.update(&size.to_le_bytes());
         read.fetch_add(cost(kind, size), Ordering::Relaxed);
         return Ok(h.finish());
-    }
-    // big files: read past the cache, they would only push out what is useful
-    #[cfg(target_os = "macos")]
-    if size > 32 << 20 {
-        use std::os::unix::io::AsRawFd;
-        unsafe { libc::fcntl(f.as_raw_fd(), libc::F_NOCACHE, 1) };
     }
     let mut buf = vec![0u8; 1 << 20];
     let mut total = 0u64;
@@ -168,7 +198,7 @@ pub fn file(path: &Path, kind: Kind, size: u64, cancel: &AtomicBool, read: &Atom
         if cancel.load(Ordering::Relaxed) {
             return Err("cancelled".into());
         }
-        let n = f.read(&mut buf).map_err(|e| e.to_string())?;
+        let n = f.read_at(&mut buf, total)?;
         if n == 0 {
             break;
         }

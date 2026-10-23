@@ -2,7 +2,7 @@
 
 use super::pathtree::PathTreeBuilder;
 use super::{Progress, ScanHandle, SharedTree};
-use crate::tree::{Kind, Source, Tree, F_DONE, NONE};
+use crate::tree::{Kind, Source, Tree, F_DENIED, F_DONE, NONE};
 use std::io::{BufRead, BufReader, Read};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::Ordering;
@@ -32,6 +32,51 @@ fn secrets() -> &'static std::sync::Mutex<std::collections::HashMap<String, Stri
 /// Remembers (in memory only) the key passphrase or password for a host.
 pub fn set_secret(host: &str, secret: String) {
     secrets().lock().unwrap().insert(host.to_string(), secret);
+}
+
+/// Android: set (to anything) when the app's SSH client should add the
+/// phone's key to the host's authorized_keys after a password sign-in.
+#[cfg(target_os = "android")]
+pub const INSTALL_KEY_ENV: &str = "SQUIRRELDISK_SSH_INSTALL_KEY";
+
+fn install_key_hosts() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
+    static S: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> = std::sync::OnceLock::new();
+    S.get_or_init(Default::default)
+}
+
+/// Android: the user asked for the phone's key to be added to `host`.
+pub fn install_key_on(host: &str) {
+    install_key_hosts().lock().unwrap().insert(host.to_string());
+}
+
+/// What the user typed as the server, as ssh takes it: `user@host`, or with
+/// a port (`-p 222`, `-p222`, `user@host:222`, a leading `ssh` copied from a
+/// terminal) `ssh://user@host:222`.
+pub fn destination(typed: &str) -> String {
+    let mut words = typed.split_whitespace().peekable();
+    if words.peek() == Some(&"ssh") {
+        words.next();
+    }
+    let (mut dest, mut port) = (None, None);
+    while let Some(w) = words.next() {
+        match w.strip_prefix("-p") {
+            Some("") => port = words.next(),
+            Some(p) => port = Some(p),
+            None if dest.is_none() => dest = Some(w),
+            None => {}
+        }
+    }
+    let Some(dest) = dest else { return typed.trim().to_string() };
+    let dest = dest.strip_prefix("ssh://").unwrap_or(dest);
+    // user@host:port (but not a bare IPv6 address, all colons)
+    let (dest, port) = match (port, dest.rsplit_once(':')) {
+        (None, Some((d, p))) if !d.contains(':') || d.ends_with(']') => (d, Some(p)),
+        _ => (dest, port),
+    };
+    match port {
+        Some(p) if p != "22" => format!("ssh://{dest}:{p}"),
+        _ => dest.to_string(),
+    }
 }
 
 /// Does this ssh error mean we need a passphrase/password from the user?
@@ -64,10 +109,27 @@ pub fn apply_ssh_options(c: &mut Command, host: &str) {
     hide_console(c);
 }
 
+#[cfg(not(target_os = "android"))]
 pub fn ssh_command(host: &str) -> Command {
     let mut c = Command::new("ssh");
     apply_ssh_options(&mut c, host);
     c.args(["-C", host]);
+    c
+}
+
+/// Android: the app's own SSH client (src/sshc.rs), a copy of its headless
+/// build that the APK carries as a library, the only place apps may run
+/// programs from (SQUIRRELDISK_SSH, set at start).
+#[cfg(target_os = "android")]
+pub fn ssh_command(host: &str) -> Command {
+    let mut c = Command::new(std::env::var_os("SQUIRRELDISK_SSH").unwrap_or_else(|| "ssh".into()));
+    c.args(["--ssh", host]);
+    if let Some(secret) = secrets().lock().unwrap().get(host) {
+        c.env(ASKPASS_ENV, secret);
+    }
+    if install_key_hosts().lock().unwrap().contains(host) {
+        c.env(INSTALL_KEY_ENV, "1");
+    }
     c
 }
 
@@ -333,7 +395,7 @@ pub fn unescape(s: &str) -> String {
 
 pub fn start_ssh(host: String, path: String) -> ScanHandle {
     let progress = Arc::new(Progress::default());
-    let display = format!("{host}:{path}");
+    let display = format!("{}:{path}", host.strip_prefix("ssh://").unwrap_or(&host));
     let tree = Arc::new(RwLock::new(Tree::new(&path, &display, Source::Ssh { host: host.clone() })));
     let (t, p) = (tree.clone(), progress.clone());
     std::thread::spawn(move || {
@@ -480,6 +542,113 @@ pub fn start_rclone(remote_path: String) -> ScanHandle {
     ScanHandle { tree, progress }
 }
 
+// ---------------------------------------------------------------------------
+// SMB file shares (src/smb)
+
+/// Folders listed at once, each on its own connection.
+const SMB_WORKERS: usize = 4;
+
+/// The share and folder of an SMB tree: its `Source::Smb` URL names the
+/// share, and its root path is the folder from the top of it.
+pub fn smb_spec(url: &str, path: &str) -> Option<crate::smb::Spec> {
+    crate::smb::Spec::parse(url).map(|s| s.at(path))
+}
+
+pub fn start_smb(url: String) -> ScanHandle {
+    use crate::smb;
+    let progress = Arc::new(Progress::default());
+    let Some(spec) = smb::Spec::parse(&url) else {
+        let tree = Arc::new(RwLock::new(Tree::new("/", &url, Source::Smb { url: url.clone() })));
+        progress.fail(format!("not a share: {url}"));
+        return ScanHandle { tree, progress };
+    };
+    let share = spec.at("").url();
+    let tree = Arc::new(RwLock::new(Tree::new(&format!("/{}", spec.path), &spec.display(), Source::Smb { url: share })));
+    let (t, p) = (tree.clone(), progress.clone());
+    std::thread::spawn(move || {
+        p.set_status("Connecting");
+        if let Err(e) = smb::check(&spec) {
+            return p.fail(e.to_string());
+        }
+        p.set_status("Scanning");
+        let base = spec.path.clone();
+        let full = move |rel: &str| match (base.as_str(), rel) {
+            (base, "") => base.to_string(),
+            ("", rel) => rel.to_string(),
+            (base, rel) => format!("{base}/{rel}"),
+        };
+        let (job_tx, job_rx) = std::sync::mpsc::channel::<String>();
+        let job_rx = Arc::new(std::sync::Mutex::new(job_rx));
+        let (res_tx, res_rx) = std::sync::mpsc::channel::<(String, Result<Vec<smb::Entry>, smb::Error>)>();
+        for w in 0..SMB_WORKERS {
+            let (jobs, res, p, spec) = (job_rx.clone(), res_tx.clone(), p.clone(), spec.clone());
+            let full = full.clone();
+            std::thread::spawn(move || loop {
+                let Ok(rel) = jobs.lock().unwrap().recv() else { break };
+                if p.cancelled() {
+                    let _ = res.send((rel, Ok(Vec::new())));
+                    continue;
+                }
+                let dir = full(&rel);
+                p.inflight.lock().unwrap().push((w, format!("/{dir}"), Instant::now()));
+                let r = smb::with(&spec, |c| c.list(&dir));
+                p.inflight.lock().unwrap().retain(|(i, ..)| *i != w);
+                if res.send((rel, r)).is_err() {
+                    break;
+                }
+            });
+        }
+        drop(res_tx);
+        let mut b = PathTreeBuilder::new(0, 256 * 1024);
+        let _ = job_tx.send(String::new());
+        let mut pending = 1usize;
+        while pending > 0 {
+            let Ok((rel, r)) = res_rx.recv() else { break };
+            pending -= 1;
+            let mut tr = t.write().unwrap();
+            match r {
+                Ok(entries) => {
+                    for e in entries {
+                        let child = if rel.is_empty() { e.name.clone() } else { format!("{rel}/{}", e.name) };
+                        if e.dir {
+                            // a link to a folder is never followed
+                            if e.link || b.ensure_dir(&mut tr, &child).is_none() {
+                                continue;
+                            }
+                            p.dirs.fetch_add(1, Ordering::Relaxed);
+                            if !p.cancelled() && job_tx.send(child).is_ok() {
+                                pending += 1;
+                            }
+                        } else {
+                            b.add_file(&mut tr, &child, e.size);
+                            p.files.fetch_add(1, Ordering::Relaxed);
+                            p.bytes.fetch_add(e.size, Ordering::Relaxed);
+                        }
+                    }
+                }
+                Err(e) if rel.is_empty() => {
+                    drop(tr);
+                    return p.fail(e.to_string());
+                }
+                Err(_) => {
+                    p.errors.fetch_add(1, Ordering::Relaxed);
+                    if let Some(id) = b.ensure_dir(&mut tr, &rel) {
+                        tr.get_mut(id).flags |= F_DENIED;
+                    }
+                }
+            }
+        }
+        drop(job_tx);
+        if p.cancelled() {
+            return p.fail("cancelled");
+        }
+        t.write().unwrap().get_mut(0).flags |= F_DONE;
+        p.set_status("Done");
+        p.done.store(true, Ordering::Relaxed);
+    });
+    ScanHandle { tree, progress }
+}
+
 /// Lists `Host` aliases from ~/.ssh/config for convenience.
 pub fn ssh_config_hosts() -> Vec<String> {
     let Some(home) = crate::settings::home_dir() else { return Vec::new() };
@@ -501,6 +670,18 @@ pub fn ssh_config_hosts() -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn destinations_with_a_port() {
+        for typed in ["ann@192.0.2.10 -p 222", "ssh ann@192.0.2.10 -p 222", "-p 222 ann@192.0.2.10", " ann@192.0.2.10 -p222 ", "ann@192.0.2.10:222", "ssh://ann@192.0.2.10:222"] {
+            assert_eq!(destination(typed), "ssh://ann@192.0.2.10:222", "{typed}");
+        }
+        assert_eq!(destination("pi@raspberrypi.local"), "pi@raspberrypi.local");
+        assert_eq!(destination("ssh pi@raspberrypi.local -p 22"), "pi@raspberrypi.local");
+        assert_eq!(destination("me@[fe80::1]:2222"), "ssh://me@[fe80::1]:2222");
+        assert_eq!(destination("me@fe80::1"), "me@fe80::1");
+        assert_eq!(destination("myserver"), "myserver");
+    }
 
     #[test]
     fn quoting() {

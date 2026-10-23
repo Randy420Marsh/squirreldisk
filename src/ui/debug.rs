@@ -1,7 +1,8 @@
 //! Developer hooks driven by environment variables (used for automated
 //! screenshots while developing; inert otherwise).
 //!
-//! * `SQD_SCAN=<path>`       start scanning a folder at launch
+//! * `SQD_SCAN=<path>`       start scanning a folder (or an smb:// share) at launch
+//! * `SQD_SMB_PASSWORD=<pw>` the password for those shares
 //! * `SQD_SHOT=<prefix>`     save screenshots as `<prefix>-<n>.bmp`
 //! * `SQD_SHOT_AT=3,8`       seconds after launch at which to shoot
 //! * `SQD_MODAL=settings|settings-end|ssh|sshauth|rclone|delete` open a modal before shooting
@@ -68,10 +69,14 @@ impl App {
                     if std::env::var_os("SQD_DUPES_PICK").is_some() {
                         d.debug_pick();
                     }
+                    // SQD_DUPES_ADD=1: with the "Add place" menu open
+                    if std::env::var_os("SQD_DUPES_ADD").is_some() {
+                        d.add_menu = Some(egui::Pos2::new(f32::INFINITY, 120.0));
+                    }
                     // SQD_DUPES=<folder>,<folder>: compare these
                     if let Ok(list) = std::env::var("SQD_DUPES") {
                         for p in list.split(',').filter(|p| !p.is_empty()) {
-                            d.add_place(super::dupes::place_for(&Target::Folder(PathBuf::from(p))));
+                            d.add_place(super::dupes::place_for(&debug_target(p)));
                         }
                         d.start();
                     }
@@ -81,7 +86,9 @@ impl App {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(true));
             }
             if let Ok(p) = std::env::var("SQD_SCAN") {
-                if let Some(v) = self.volumes.iter().find(|v| v.mount == p).cloned() {
+                if p.starts_with("smb://") {
+                    self.start_session(debug_target(&p));
+                } else if let Some(v) = self.volumes.iter().find(|v| v.mount == p).cloned() {
                     self.start_session(Target::Volume(v));
                 } else {
                     self.start_session(Target::Folder(PathBuf::from(p)));
@@ -130,6 +137,7 @@ impl App {
                     super::app::install_fonts(ctx, crate::i18n::current(), true);
                 }
                 Ok("ssh") => self.open_modal(Modal::Ssh { host: String::new(), path: "/".into() }),
+                Ok("smb") => self.open_modal(Modal::Smb(Default::default())),
                 Ok("sshauth") => self.open_modal(Modal::SshAuth { host: "user@server".into(), path: "/".into(), secret: String::new(), retry: false }),
                 Ok(m) if m.starts_with("cloud") => {
                     let kind = m.trim_start_matches("cloud").trim_start_matches(':');
@@ -199,4 +207,17 @@ fn write_bmp(path: &str, img: &egui::ColorImage) -> std::io::Result<()> {
         out.extend_from_slice(&[p.b(), p.g(), p.r(), 255]);
     }
     std::fs::write(path, out)
+}
+
+/// A folder, or an smb:// share signed in with `SQD_SMB_PASSWORD`.
+fn debug_target(p: &str) -> Target {
+    match crate::smb::Spec::parse(p).filter(|_| p.starts_with("smb://")) {
+        Some(spec) => {
+            if let Ok(pw) = std::env::var("SQD_SMB_PASSWORD") {
+                crate::smb::set_password(&spec, pw);
+            }
+            Target::Smb(spec.url())
+        }
+        None => Target::Folder(PathBuf::from(p)),
+    }
 }

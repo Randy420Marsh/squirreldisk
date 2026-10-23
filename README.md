@@ -120,7 +120,7 @@ To use a specific folder instead, set the `SQUIRRELDISK_CONFIG_DIR` environment 
 
 **Always up to date.** Delete something in Finder, Explorer or your file manager and the chart updates on its own.
 
-**Servers, shares and cloud storage too.** Scan any machine you can reach over SSH. Mounted network shares (SMB 1, 2 and 3, NFS) appear on the home screen next to your disks. S3 buckets, Google Drive, Dropbox, FTP, SMB and many more cloud services work through [rclone](https://rclone.org): install rclone yourself, then add, edit and remove your accounts right from the app.
+**Servers, shares and cloud storage too.** Scan any machine you can reach over SSH. Windows shares, NAS boxes and Samba servers can be scanned directly over SMB 1, 2 or 3, encrypted with SMB 3, and mounted shares (SMB, NFS) appear on the home screen next to your disks. S3 buckets, Google Drive, Dropbox, FTP, SMB and many more cloud services work through [rclone](https://rclone.org): install rclone yourself, then add, edit and remove your accounts right from the app.
 
 **Right from your folders.** Turn on "Folder menu" in Settings and right-clicking a folder offers "Scan with SquirrelDisk": in Finder's Quick Actions on macOS, in Explorer on Windows (under "Show more options" on Windows 11), and in Dolphin, Nemo, Nautilus (Scripts) or any file manager's "Open with" on Linux.
 

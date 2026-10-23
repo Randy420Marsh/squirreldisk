@@ -17,6 +17,10 @@ pub struct Drag {
     pub size: u64,
     pub color: Color32,
     pub pos: Pos2,
+    /// Where it was picked up, and whether it went anywhere since: let go
+    /// where it was picked up, it opens its menu instead (a long press).
+    pub origin: Pos2,
+    pub moved: bool,
     pub vel: Vec2,
     pub over_bin: bool,
     pub started: Instant,
@@ -226,7 +230,11 @@ impl App {
         d.vel += acc * dt;
         d.pos += d.vel * dt;
         let bin = self.bin_rect.expand(24.0);
-        d.over_bin = pointer.is_some_and(|p| bin.contains(p));
+        // a finger let go leaves no pointer: keep where it was last
+        if let Some(p) = pointer {
+            d.over_bin = bin.contains(p);
+            d.moved |= p.distance(d.origin) > 10.0;
+        }
         ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
 
         let theme = self.theme.clone();
@@ -270,6 +278,8 @@ impl App {
                 } else {
                     self.toasts.push(tr("Already collected (or not deletable)").into(), theme.warn);
                 }
+            } else if !d.moved {
+                self.ctx_menu = Some(super::app::CtxMenu { session: d.session, node: d.node, pos: d.origin, opened: Instant::now() });
             }
             return; // drag ends
         }

@@ -62,6 +62,8 @@ pub enum Source {
     Local,
     Ssh { host: String },
     Rclone { remote: String },
+    /// An SMB share, by its URL (src/smb); paths are from the top of it.
+    Smb { url: String },
     /// `MARKETING_DEMO`: fake data, nothing on disk.
     Demo,
 }

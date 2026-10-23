@@ -111,6 +111,7 @@ pub fn button_ex(ui: &mut Ui, rect: Rect, id: Id, label: &str, icon: Option<Icon
 pub fn button_shaped(ui: &mut Ui, rect: Rect, id: Id, label: &str, icon: Option<Icon>, style: BtnStyle, theme: &Theme, enabled: bool, radius: CornerRadius) -> Response {
     let sense = if enabled { Sense::click() } else { Sense::hover() };
     let resp = ui.interact(rect, id, sense);
+    tick(ui, &resp);
     let ctx = ui.ctx();
     let h = ctx.animate_bool_with_time(id.with("h"), resp.hovered() && enabled, 0.12);
     let p = ctx.animate_bool_with_time(id.with("p"), resp.is_pointer_button_down_on() && enabled, 0.06);
@@ -162,6 +163,7 @@ pub fn button_shaped(ui: &mut Ui, rect: Rect, id: Id, label: &str, icon: Option<
 pub fn icon_button(ui: &mut Ui, rect: Rect, id: Id, icon: Icon, theme: &Theme, enabled: bool) -> Response {
     let sense = if enabled { Sense::click() } else { Sense::hover() };
     let resp = ui.interact(rect, id, sense);
+    tick(ui, &resp);
     let h = ui.ctx().animate_bool_with_time(id.with("h"), resp.hovered() && enabled, 0.12);
     if resp.hovered() && enabled {
         ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
@@ -177,6 +179,7 @@ pub fn icon_button(ui: &mut Ui, rect: Rect, id: Id, icon: Icon, theme: &Theme, e
 
 pub fn toggle(ui: &mut Ui, rect: Rect, id: Id, value: &mut bool, theme: &Theme) -> Response {
     let mut resp = ui.interact(rect, id, Sense::click());
+    tick(ui, &resp);
     if resp.clicked() {
         *value = !*value;
         resp.mark_changed();
@@ -275,9 +278,32 @@ pub fn text_input(ui: &mut Ui, rect: Rect, id: Id, value: &mut String, hint: &st
     ui.put(inner, edit)
 }
 
+/// A text field that hides what's typed; red after a refused try.
+pub fn secret_input(ui: &mut Ui, rect: Rect, id: Id, value: &mut String, refused: bool, theme: &Theme) -> Response {
+    let focused = ui.memory(|m| m.has_focus(id));
+    let t = ui.ctx().animate_bool_with_time(id.with("f"), focused, 0.15);
+    {
+        let painter = ui.painter();
+        let edge = if refused { theme.danger } else { lerp_color(theme.stroke, theme.accent, t) };
+        painter.rect_filled(rect, cr(6.0), lerp_color(with_alpha(theme.bg_bottom, 0.6), with_alpha(theme.bg_bottom, 0.9), t));
+        painter.rect_stroke(rect, cr(6.0), Stroke::new(1.0, edge), StrokeKind::Inside);
+    }
+    let inner = rect.shrink2(Vec2::new(12.0, 0.0));
+    let edit = egui::TextEdit::singleline(value)
+        .id(id)
+        .password(true)
+        .frame(egui::Frame::NONE)
+        .font(font(14.0))
+        .text_color(theme.text)
+        .desired_width(inner.width())
+        .vertical_align(egui::Align::Center);
+    ui.put(inner, edit)
+}
+
 /// A selectable card (radio-like).
 pub fn choice_card(ui: &mut Ui, rect: Rect, id: Id, selected: bool, title: &str, subtitle: &str, icon: Icon, theme: &Theme, enabled: bool) -> Response {
     let resp = ui.interact(rect, id, if enabled { Sense::click() } else { Sense::hover() });
+    tick(ui, &resp);
     let h = ui.ctx().animate_bool_with_time(id.with("h"), resp.hovered() && enabled, 0.12);
     let s = ui.ctx().animate_bool_with_time(id.with("s"), selected, 0.15);
     if resp.hovered() && enabled {
@@ -305,6 +331,7 @@ pub fn choice_card(ui: &mut Ui, rect: Rect, id: Id, selected: bool, title: &str,
 
 pub fn checkbox(ui: &mut Ui, rect: Rect, id: Id, value: &mut bool, label: &str, theme: &Theme) -> Response {
     let resp = ui.interact(rect, id, Sense::click());
+    tick(ui, &resp);
     if resp.clicked() {
         *value = !*value;
     }
@@ -325,6 +352,11 @@ pub fn checkbox(ui: &mut Ui, rect: Rect, id: Id, value: &mut bool, label: &str, 
 /// Stepped slider with integer values.
 pub fn stepper(ui: &mut Ui, rect: Rect, id: Id, value: &mut usize, min: usize, max: usize, theme: &Theme) -> Response {
     let mut resp = ui.interact(rect, id, Sense::click_and_drag());
+    if resp.drag_stopped() {
+        click(ui);
+    } else {
+        tick(ui, &resp);
+    }
     let track = Rect::from_center_size(rect.center(), Vec2::new(rect.width() - 16.0, 4.0));
     if let Some(p) = resp.interact_pointer_pos() {
         if resp.dragged() || resp.clicked() {
@@ -406,6 +438,8 @@ pub enum Icon {
     Play,
     /// Chevron pointing down.
     Expand,
+    /// A folder on a network: an SMB share.
+    Share,
 }
 
 pub fn draw_icon(p: &Painter, icon: Icon, r: Rect, c: Color32) {
@@ -453,6 +487,13 @@ pub fn draw_icon(p: &Painter, icon: Icon, r: Rect, c: Color32) {
             let pts = vec![at(-0.8, -0.55), at(-0.25, -0.55), at(-0.1, -0.38), at(0.8, -0.38), at(0.8, 0.6), at(-0.8, 0.6)];
             p.add(Shape::closed_line(pts, st));
             p.line_segment([at(-0.8, -0.2), at(0.8, -0.2)], st);
+        }
+        Icon::Share => {
+            let pts = vec![at(-0.8, -0.75), at(-0.25, -0.75), at(-0.1, -0.6), at(0.8, -0.6), at(0.8, 0.25), at(-0.8, 0.25)];
+            p.add(Shape::closed_line(pts, st));
+            p.line_segment([at(0.0, 0.25), at(0.0, 0.62)], st);
+            p.line_segment([at(-0.8, 0.75), at(0.8, 0.75)], st);
+            p.circle_filled(at(0.0, 0.75), w * 1.6, c);
         }
         Icon::File => {
             let pts = vec![at(-0.55, -0.8), at(0.2, -0.8), at(0.6, -0.4), at(0.6, 0.8), at(-0.55, 0.8)];
@@ -590,5 +631,95 @@ pub fn acorn(p: &Painter, ctr: Pos2, s: f32, stroke_c: Color32, fill: Option<(Co
             p.line(c2, st);
             p.line_segment([at(0.0, -0.62), at(0.12, -0.85)], st);
         }
+    }
+}
+
+/// How long a press is held still before what is under it is picked up.
+pub const HOLD: f32 = 0.35;
+
+/// Press and hold to pick something up, the same with a mouse, a pen or a
+/// finger, so a quick swipe never drags anything to be deleted: the place
+/// the press began, on the one frame it has been held there for [`HOLD`]
+/// seconds. A ring fills under the pointer meanwhile.
+pub fn held(ui: &Ui, resp: &Response, theme: &Theme) -> Option<Pos2> {
+    let id = resp.id.with("hold");
+    let (down, origin, start, pos, now) =
+        ui.input(|i| (i.pointer.primary_down(), i.pointer.press_origin(), i.pointer.press_start_time(), i.pointer.latest_pos(), i.time));
+    let (Some(origin), Some(start)) = (origin, start) else { return None };
+    if !down || !resp.is_pointer_button_down_on() {
+        return None;
+    }
+    // one pick-up per press, and none once it moved
+    let spent = ui.data(|d| d.get_temp::<f64>(id)) == Some(start);
+    if spent {
+        return None;
+    }
+    if pos.is_some_and(|p| p.distance(origin) > 10.0) {
+        ui.data_mut(|d| d.insert_temp(id, start));
+        return None;
+    }
+    let t = (now - start) as f32;
+    if t >= HOLD {
+        ui.data_mut(|d| d.insert_temp(id, start));
+        return Some(origin);
+    }
+    let f = ((t - 0.08) / (HOLD - 0.08)).clamp(0.0, 1.0);
+    if f > 0.0 {
+        let p = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, id));
+        let c = origin - egui::vec2(0.0, 34.0);
+        p.circle_stroke(c, 13.0, Stroke::new(3.0, with_alpha(theme.stroke, 0.6)));
+        let n = 24;
+        let pts: Vec<Pos2> = (0..=n).map(|k| c + egui::Vec2::angled(-PI / 2.0 + TAU * f * k as f32 / n as f32) * 13.0).collect();
+        p.add(egui::Shape::line(pts, Stroke::new(3.0, theme.warn)));
+    }
+    ui.ctx().request_repaint();
+    None
+}
+
+const CLICK: &str = "ui-click";
+
+/// Notes a click, so the app can play its click sound (see [`take_click`]).
+pub fn click(ui: &Ui) {
+    ui.ctx().data_mut(|d| d.insert_temp(Id::new(CLICK), true));
+}
+
+fn tick(ui: &Ui, resp: &Response) {
+    if resp.clicked() {
+        click(ui);
+    }
+}
+
+/// Whether a widget was clicked since the last call.
+pub fn take_click(ctx: &egui::Context) -> bool {
+    ctx.data_mut(|d| d.remove_temp::<bool>(Id::new(CLICK))).unwrap_or(false)
+}
+
+/// Each letter of `text` with its width; every digit gets the widest
+/// digit's, so a number that counts up doesn't jiggle.
+fn steady_parts(p: &Painter, text: &str, f: &FontId) -> Vec<(std::sync::Arc<egui::Galley>, f32)> {
+    let digit = ('0'..='9').map(|d| p.layout_no_wrap(d.to_string(), f.clone(), Color32::WHITE).size().x).fold(0.0, f32::max);
+    text.chars()
+        .map(|ch| {
+            let g = p.layout_no_wrap(ch.to_string(), f.clone(), Color32::WHITE);
+            let w = if ch.is_ascii_digit() { digit } else { g.size().x };
+            (g, w)
+        })
+        .collect()
+}
+
+/// How wide [`steady_text`] draws `text`.
+pub fn steady_width(p: &Painter, text: &str, f: &FontId) -> f32 {
+    steady_parts(p, text, f).iter().map(|(_, w)| w).sum()
+}
+
+/// Text with steady digits (see [`steady_parts`]), centred on `c`.
+pub fn steady_text(p: &Painter, c: Pos2, text: &str, f: FontId, color: Color32) {
+    let parts = steady_parts(p, text, &f);
+    let total: f32 = parts.iter().map(|(_, w)| w).sum();
+    let h = p.fonts_mut(|fo| fo.row_height(&f));
+    let mut x = c.x - total / 2.0;
+    for (g, w) in parts {
+        p.galley(Pos2::new(x + (w - g.size().x) / 2.0, c.y - h / 2.0), g, color);
+        x += w;
     }
 }

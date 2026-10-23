@@ -377,7 +377,9 @@ impl App {
         if hit.is_some() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
-        if resp.clicked() {
+        // a press held to pick something up is no click
+        let picked = self.drag.is_some();
+        if resp.clicked() && !picked {
             if let Some(t) = hit.clone() {
                 match t.kind {
                     SegKind::Group { parent, skip, .. } => {
@@ -395,13 +397,10 @@ impl App {
                 self.sfx(Sfx::BlipDown);
             }
         }
-        if resp.double_clicked() {
+        if resp.double_clicked() && !picked {
             if let Some(t) = &hit {
-                if matches!(t.kind, SegKind::Node(Kind::File)) && self.sessions[si].source().is_local() {
-                    let path = self.sessions[si].tree.read().unwrap().path(t.node);
-                    if super::app::os_open(&path, false) {
-                        self.toasts.push(tr("Programs and scripts are shown in the file manager, not run").into(), self.theme.accent);
-                    }
+                if matches!(t.kind, SegKind::Node(Kind::File)) {
+                    self.open_file(ui.ctx(), si, t.node);
                 }
             }
         }
@@ -412,8 +411,8 @@ impl App {
                 }
             }
         }
-        if resp.drag_started() && self.drag.is_none() {
-            if let Some(o) = ui.ctx().input(|i| i.pointer.press_origin()) {
+        if self.drag.is_none() {
+            if let Some(o) = widgets::held(ui, &resp, &theme) {
                 let t = self.sessions[si].treemap.hit(o).map(|a| (a.tile.clone(), a.color));
                 if let Some((t, color)) = t {
                     if let SegKind::Node(k) = t.kind {

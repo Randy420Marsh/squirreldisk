@@ -4,6 +4,10 @@
 #![cfg_attr(not(feature = "gui"), allow(dead_code))]
 
 mod agent;
+#[cfg(all(target_os = "android", feature = "gui"))]
+mod android;
+#[cfg(target_os = "android")]
+mod sshc;
 mod cli;
 mod delete;
 #[cfg(unix)]
@@ -12,6 +16,7 @@ mod rclone;
 mod safety;
 mod scan;
 mod settings;
+mod smb;
 mod tree;
 
 #[cfg(feature = "gui")]
@@ -50,6 +55,12 @@ fn restore_library_path() {
 
 fn main() {
     restore_library_path();
+    // Android: the app's SSH client (it gets the secret below too)
+    #[cfg(target_os = "android")]
+    if std::env::args().nth(1).is_some_and(|a| a == "--ssh") {
+        let args: Vec<String> = std::env::args().skip(2).collect();
+        std::process::exit(sshc::main(&args));
+    }
     // Invoked by ssh as SSH_ASKPASS helper: answer the prompt and leave.
     if let Ok(secret) = std::env::var(scan::remote::ASKPASS_ENV) {
         println!("{secret}");

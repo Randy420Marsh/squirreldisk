@@ -29,7 +29,7 @@ const SKIP_DIRS: &[&str] = &[
 /// Packages whose files belong together: deleting one breaks the whole.
 const SKIP_PACKAGES: &[&str] = &[".app", ".framework", ".bundle", ".plugin", ".kext", ".appex", ".xpc", ".dSYM", ".xcarchive", ".pkg"];
 
-fn skip_dir(name: &str) -> bool {
+pub(crate) fn skip_dir(name: &str) -> bool {
     SKIP_DIRS.contains(&name) || SKIP_PACKAGES.iter().any(|ext| name.len() > ext.len() && name.to_ascii_lowercase().ends_with(&ext.to_ascii_lowercase()))
 }
 

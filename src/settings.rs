@@ -58,7 +58,11 @@ pub struct Settings {
     pub chart_style: String,
     pub watch_fs: bool,
     pub ssh_history: Vec<String>,
+    /// Shares scanned before, as smb:// URLs (never with a password).
+    pub smb_history: Vec<String>,
     pub backup_folder: Option<String>,
+    /// The folder last chosen in the app's own folder browser (Android).
+    pub last_folder: Option<String>,
     pub backup_remote: Option<String>,
     pub skipped_version: Option<String>,
     /// "Scan with SquirrelDisk" in the file manager's menu for folders.
@@ -82,7 +86,9 @@ impl Default for Settings {
             chart_style: "sunburst".into(),
             watch_fs: true,
             ssh_history: Vec::new(),
+            smb_history: Vec::new(),
             backup_folder: None,
+            last_folder: None,
             backup_remote: None,
             skipped_version: None,
             folder_menu: false,

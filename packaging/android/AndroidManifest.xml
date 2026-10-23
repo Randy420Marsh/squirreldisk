@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Built by scripts/build-android.sh, which fills in the version. No Java
+     code: NativeActivity loads libsquirreldisk_android.so (src/lib.rs). The
+     INTERNET permission is for SSH scans only, which the user starts; the app
+     makes no requests of its own. Libraries are unpacked so that
+     libsquirreldisk_ssh.so, the SSH client (src/sshc.rs), can be run.
+     enableOnBackInvokedCallback="false": from Android 16 Back otherwise
+     closes the app without ever reaching it (predictive back), so it can't
+     go up a folder or out of a dialog. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="io.github.randy420marsh.squirreldisk"
+    android:versionCode="@VERSION_CODE@"
+    android:versionName="@VERSION@">
+    <uses-sdk android:minSdkVersion="30" android:targetSdkVersion="36" />
+    <!-- "All files access": without it only the app's own folders are visible -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-feature android:glEsVersion="0x00030000" android:required="true" />
+    <application
+        android:label="SquirrelDisk"
+        android:icon="@mipmap/ic_launcher"
+        android:hasCode="false"
+        android:extractNativeLibs="true"
+        android:enableOnBackInvokedCallback="false"
+        android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+        <activity
+            android:name="android.app.NativeActivity"
+            android:exported="true"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|keyboard|density|uiMode"
+            android:launchMode="singleTask">
+            <meta-data android:name="android.app.lib_name" android:value="squirreldisk_android" />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

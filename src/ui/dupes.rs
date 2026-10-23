@@ -568,6 +568,7 @@ pub fn place_for(t: &Target) -> Place {
         },
         Target::Ssh { host, path } => Place { kind: PlaceKind::Server, label: t.title(), path: format!("{host}:{path}"), spec: Some(Spec::Ssh { host: host.clone(), path: path.clone() }) },
         Target::Rclone(r) => Place { kind: PlaceKind::Cloud, label: r.clone(), path: r.clone(), spec: Some(Spec::Rclone(r.clone())) },
+        Target::Smb(u) => Place { kind: PlaceKind::Share, label: t.title(), path: t.title(), spec: Some(Spec::Smb(u.clone())) },
     }
 }
 
@@ -620,7 +621,7 @@ impl Thumbs {
         if let Some(t) = self.tex.get(&id) {
             return t.as_ref().map(|(t, a)| (t.id(), *a));
         }
-        if !cfg!(target_os = "macos") || !self.asked.insert(id) {
+        if !self.asked.insert(id) {
             return None;
         }
         if !self.started {
@@ -668,7 +669,17 @@ fn thumb_worker(q: Arc<ThumbQueue>) {
                 todo = q.cv.wait(todo).unwrap();
             }
         };
-        let img = quicklook(&path, id);
+        // Quick Look reads RAW too; elsewhere, what the preview dialog reads
+        let img = if cfg!(target_os = "macos") {
+            quicklook(&path, id)
+        } else {
+            let p = std::path::Path::new(&path);
+            match super::preview::sniff(p) {
+                Some(super::preview::Kind::Image) => super::preview::picture(p).ok(),
+                Some(super::preview::Kind::Video) => super::preview::video_frame(p),
+                _ => None,
+            }
+        };
         q.done.lock().unwrap().push((id, img));
         if let Some(ctx) = q.ctx.lock().unwrap().as_ref() {
             ctx.request_repaint();
@@ -676,7 +687,8 @@ fn thumb_worker(q: Arc<ThumbQueue>) {
     }
 }
 
-fn quicklook(path: &str, id: u32) -> Option<egui::ColorImage> {
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(super) fn quicklook(path: &str, id: u32) -> Option<egui::ColorImage> {
     let dir = std::env::temp_dir().join(format!("squirreldisk-thumbs-{}", std::process::id())).join(id.to_string());
     std::fs::create_dir_all(&dir).ok()?;
     let status = std::process::Command::new("qlmanage")
@@ -728,6 +740,18 @@ impl App {
             self.sfx(Sfx::Success);
         }
         // a server that wants a password: ask once
+        if self.modal.is_none() {
+            let share = d.status().and_then(|st| {
+                st.places.iter().enumerate().find_map(|(k, ps)| match (d.places.get(k).and_then(|p| p.spec.as_ref()), &ps.error) {
+                    (Some(Spec::Smb(url)), Some(e)) if crate::smb::is_auth_error(e) && !d.auth_asked.contains(url) => Some((url.clone(), e.clone())),
+                    _ => None,
+                })
+            });
+            if let Some((url, e)) = share {
+                d.auth_asked.insert(url.clone());
+                self.open_modal(Modal::Smb(Box::new(super::smb::SmbForm::again(&url, Some(e), true))));
+            }
+        }
         if self.modal.is_none() {
             let ask = d.status().and_then(|st| {
                 st.places.iter().enumerate().find_map(|(k, ps)| match (d.places.get(k).and_then(|p| p.spec.as_ref()), &ps.error) {
@@ -959,7 +983,9 @@ impl App {
             d.add_menu = if d.add_menu.is_some() { None } else { Some(add.left_bottom() + Vec2::new(0.0, 6.0)) };
         }
         if d.places.is_empty() {
-            ui.painter().text(Pos2::new(add.right() + 12.0, add.center().y), Align2::LEFT_CENTER, tr("Folders, disks, servers or cloud storage"), font(12.0), theme.text_faint);
+            let hint = if cfg!(target_os = "android") { tr("Folders, disks or servers") } else { tr("Folders, disks, servers or cloud storage") };
+            let hint = widgets::truncate(ui.painter(), hint, &font(12.0), left.right() - add.right() - 12.0);
+            ui.painter().text(Pos2::new(add.right() + 12.0, add.center().y), Align2::LEFT_CENTER, hint, font(12.0), theme.text_faint);
         }
         if let Some(k) = remove {
             d.remove_place(k);
@@ -1052,17 +1078,25 @@ impl App {
             Folder,
             Volume(crate::disks::Volume),
             Server,
+            Share,
             Cloud,
         }
-        let mut items: Vec<(Icon, String, String, Pick)> = vec![(Icon::Folder, tr("Folders…").into(), tr("Pick one or more").into(), Pick::Folder)];
+        let mut items: Vec<(Icon, String, String, Pick)> = vec![(Icon::Folder, tr("Folders…").into(), if cfg!(target_os = "android") { tr("Pick a folder") } else { tr("Pick one or more") }.into(), Pick::Folder)];
         for v in &self.volumes {
             let sub = format!("{} · {}", fmt_size(v.total), v.mount);
             items.push((if v.removable { Icon::External } else { Icon::Disk }, v.name.clone(), sub, Pick::Volume(v.clone())));
         }
         items.push((Icon::Server, tr("Remote server").into(), tr("Over SSH").into(), Pick::Server));
-        items.push((Icon::Cloud, tr("Cloud storage").into(), tr("Drive, S3, Dropbox… with rclone").into(), Pick::Cloud));
-        let w = 280.0;
+        items.push((Icon::Share, tr("Windows share").into(), tr("A NAS or PC over SMB").into(), Pick::Share));
+        // a phone has no rclone (as on the home screen)
+        if !cfg!(target_os = "android") {
+            items.push((Icon::Cloud, tr("Cloud storage").into(), tr("Drive, S3, Dropbox… with rclone").into(), Pick::Cloud));
+        }
+        // kept on the screen, however narrow
+        let screen = ui.ctx().content_rect().shrink(8.0);
+        let w = 280.0_f32.min(screen.width());
         let h = items.len() as f32 * 46.0 + 12.0;
+        let origin = Pos2::new(origin.x.min(screen.right() - w).max(screen.left()), origin.y.min(screen.bottom() - h).max(screen.top()));
         let mut chosen = None;
         let mut rect_out = Rect::NOTHING;
         egui::Area::new(Id::new("dupes-add-menu")).order(egui::Order::Foreground).fixed_pos(origin).show(ui.ctx(), |ui| {
@@ -1093,14 +1127,11 @@ impl App {
             }
         });
         let clicked_out = ui.input(|i| i.pointer.any_pressed()) && ui.input(|i| i.pointer.interact_pos()).is_some_and(|p| !rect_out.contains(p));
+        let mut folder = false;
         if let Some(k) = chosen {
             d.add_menu = None;
             match &items[k].3 {
-                Pick::Folder => {
-                    for p in rfd::FileDialog::new().set_title(tr("Choose folders to compare")).pick_folders().unwrap_or_default() {
-                        d.add_place(place_for(&Target::Folder(p)));
-                    }
-                }
+                Pick::Folder => folder = true,
                 Pick::Volume(v) => d.add_place(place_for(&Target::Volume(v.clone()))),
                 // the usual dialogs: what they open comes back through
                 // `start_session`, which adds it here (see `App::start_session`)
@@ -1108,11 +1139,27 @@ impl App {
                     let host = self.settings.ssh_history.first().cloned().unwrap_or_default();
                     self.open_modal(Modal::Ssh { host, path: "/".into() });
                 }
+                Pick::Share => {
+                    let f = self.settings.smb_history.first().map(|u| super::smb::SmbForm::again(u, None, false)).unwrap_or_default();
+                    self.open_modal(Modal::Smb(Box::new(f)));
+                }
                 Pick::Cloud => self.open_modal(Modal::Rclone { path: String::new(), confirm_remove: None }),
             }
             self.sfx(Sfx::Blip);
         } else if clicked_out {
             d.add_menu = None;
+        }
+        // `d` is out of `self.dupes` while this screen draws: the dialog
+        // adds to it once it is back (see `App::folder_modal`)
+        if folder {
+            if cfg!(target_os = "android") || std::env::var_os("SQD_IN_APP_PICKER").is_some() {
+                self.choose_folder(true);
+            } else {
+                #[cfg(not(target_os = "android"))]
+                for p in super::pick::folders(tr("Choose folders to compare")) {
+                    d.add_place(place_for(&Target::Folder(p)));
+                }
+            }
         }
     }
 
@@ -2064,6 +2111,7 @@ fn place_icon(kind: PlaceKind) -> Icon {
         PlaceKind::Disk => Icon::External,
         PlaceKind::Server => Icon::Server,
         PlaceKind::Cloud => Icon::Cloud,
+        PlaceKind::Share => Icon::Share,
     }
 }
 

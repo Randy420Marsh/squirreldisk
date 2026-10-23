@@ -12,6 +12,18 @@ every change in detail, with its date.
 
 ## Changes in this fork
 
+### 2026-10-23
+
+- Windows (SMB 1/2/3) shares can be scanned directly, with the app's own
+  SMB client: NTLMv2 sign-in, signing and SMB 3 encryption (`src/smb/`,
+  `src/ui/smb.rs`). Passwords stay in memory only.
+- Previews, Open and Show folder, a built-in folder picker, and hold to pick
+  up on touch screens (`src/ui/preview.rs`, `src/ui/pick.rs`, `src/ui/`).
+- The duplicate finder can compare any folder, disk, server or share.
+- An Android build (`src/android.rs`, `src/lib.rs`, `src/sshc.rs`,
+  `packaging/android/`, `scripts/build-android.sh`).
+- Translations for the new texts in all languages (`assets/i18n/*`).
+
 ### 2026-10-22: no-network build (based on upstream 2.6.1)
 
 - Removed the sponsor banner and everything behind it: the sponsor list

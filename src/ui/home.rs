@@ -103,10 +103,6 @@ impl App {
         y += 8.0;
         section_label(ui, Pos2::new(x0, y), tr("SCAN SOMETHING ELSE"), &theme);
         y += 22.0;
-        // side by side, or one under the other on a narrow window
-        let stacked = w < 520.0;
-        let gap = if stacked { 10.0 } else { 14.0 };
-        let (cw, ch) = if stacked { (w, 60.0) } else { ((w - gap * 2.0) / 3.0, 104.0) };
         let rclone_state = self.rclone.lock().unwrap().clone();
         let rclone_sub = match &rclone_state {
             RcloneState::Looking => tr("Looking for rclone…").to_string(),
@@ -114,30 +110,43 @@ impl App {
             RcloneState::Ready(v) if v.is_empty() => tr("Add Google Drive, S3, Dropbox…").to_string(),
             RcloneState::Ready(v) => if v.len() == 1 { tr("1 remote configured").to_string() } else { trf("{n} remotes configured", &[("n", &v.len())]) },
         };
-        let cards = [
+        let mut cards = vec![
             (Icon::Folder, tr("A folder"), tr("Pick any folder, or drop it here").to_string(), 0usize),
             (Icon::Server, tr("Remote server"), tr("Any machine you can SSH into").to_string(), 1),
+            (Icon::Share, tr("Windows share"), tr("A NAS or PC over SMB").to_string(), 3),
             (Icon::Cloud, tr("Cloud storage"), rclone_sub, 2),
         ];
+        // a phone has no rclone, and nothing is dropped on it
+        if cfg!(target_os = "android") {
+            cards.pop();
+            cards[0].2 = tr("Pick any folder").to_string();
+        }
+        let n = cards.len() as f32;
+        // side by side, or one under the other on a narrow window
+        let stacked = w < n * 164.0 + (n - 1.0) * 14.0;
+        let gap = if stacked { 10.0 } else { 14.0 };
+        let (cw, ch) = if stacked { (w, 60.0) } else { ((w - gap * (n - 1.0)) / n, 104.0) };
         for (k, (icon, title, sub, action)) in cards.into_iter().enumerate() {
             let at = if stacked { Pos2::new(x0, y + k as f32 * (ch + gap)) } else { Pos2::new(x0 + k as f32 * (cw + gap), y) };
             let rect = Rect::from_min_size(at, Vec2::new(cw, ch));
             if source_card(ui, rect, Id::new(("src", k)), icon, title, &sub, &theme).clicked() {
                 match action {
                     0 => {
-                        if let Some(p) = rfd::FileDialog::new().set_title(tr("Choose a folder to scan")).pick_folder() {
-                            self.start_session(Target::Folder(p));
-                        }
+                        self.choose_folder(false);
                     }
                     1 => {
                         let host = self.settings.ssh_history.first().cloned().unwrap_or_default();
                         self.open_modal(Modal::Ssh { host, path: "/".into() });
                     }
+                    3 => {
+                        let f = self.settings.smb_history.first().map(|u| crate::ui::smb::SmbForm::again(u, None, false)).unwrap_or_default();
+                        self.open_modal(Modal::Smb(Box::new(f)));
+                    }
                     _ => self.open_modal(Modal::Rclone { path: String::new(), confirm_remove: None }),
                 }
             }
         }
-        y += if stacked { 3.0 * (ch + gap) + 4.0 } else { 118.0 };
+        y += if stacked { n * (ch + gap) + 4.0 } else { 118.0 };
 
         // --- tools
         section_label(ui, Pos2::new(x0, y), tr("TOOLS"), &theme);
@@ -149,7 +158,11 @@ impl App {
         y += 76.0;
 
         let p = ui.painter();
-        let foot = format!("v{} · {}", env!("CARGO_PKG_VERSION"), tr("drop a folder anywhere to scan it · Esc goes back"));
+        let foot = if cfg!(target_os = "android") {
+            format!("v{}", env!("CARGO_PKG_VERSION"))
+        } else {
+            format!("v{} · {}", env!("CARGO_PKG_VERSION"), tr("drop a folder anywhere to scan it · Esc goes back"))
+        };
         let foot_y = (y + 20.0).max(screen.bottom() - 26.0 - self.home_scroll);
         p.text(Pos2::new(screen.center().x, foot_y), Align2::CENTER_CENTER, foot, font(11.5), theme.text_faint);
         self.home_content_h = y + 44.0 - page_top;
@@ -303,6 +316,7 @@ impl App {
             Target::Folder(_) => (Icon::Folder, tr("folder")),
             Target::Ssh { .. } => (Icon::Server, tr("server")),
             Target::Rclone(_) => (Icon::Cloud, tr("cloud")),
+            Target::Smb(_) => (Icon::Share, tr("share")),
             Target::Volume(_) => (Icon::Disk, tr("disk")),
         };
         let size = {

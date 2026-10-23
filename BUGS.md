@@ -365,3 +365,15 @@ language picker or the chart-style buttons.
 
 **Fix.** Each description is truncated to the space left of its control.
 File: `src/ui/modals.rs`.
+
+## Tests
+
+### The layout tests panicked after an egui update
+
+**Bug.** The layout tests run frames with no renderer, so the font atlas
+was never uploaded. Newer epaint panics when a frame's textures are dropped
+unused ("Dropped TexturesDelta with 1 unapplied deltas"), and every layout
+test failed.
+
+**Fix.** The test frame clears the textures it was given.
+File: `src/ui/layout_tests.rs` (`widget_frame`).

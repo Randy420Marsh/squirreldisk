@@ -38,6 +38,8 @@ pub enum Spec {
     Local(PathBuf),
     Ssh { host: String, path: String },
     Rclone(String),
+    /// A folder on an SMB share, by its smb:// URL.
+    Smb(String),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -268,6 +270,8 @@ enum ExecKind {
     Local(u64),
     Ssh(String),
     Rclone(String),
+    /// The share, by the URL of its top.
+    Smb(String),
 }
 
 struct Exec {
@@ -353,6 +357,7 @@ fn coordinate(inner: Arc<Inner>, specs: Vec<Spec>, opts: Options) {
             Spec::Local(p) => ExecKind::Local(crate::scan::platform::device_of(p).unwrap_or(0)),
             Spec::Ssh { host, .. } => ExecKind::Ssh(host.clone()),
             Spec::Rclone(r) => ExecKind::Rclone(r.split(':').next().unwrap_or(r).to_string()),
+            Spec::Smb(u) => ExecKind::Smb(crate::smb::Spec::parse(u).map(|s| s.at("").url()).unwrap_or_else(|| u.clone())),
         };
         let e = match execs.iter().position(|e| e.kind == kind) {
             Some(e) => e,
@@ -372,6 +377,7 @@ fn coordinate(inner: Arc<Inner>, specs: Vec<Spec>, opts: Options) {
             ExecKind::Local(_) => 2,
             ExecKind::Ssh(_) => 1,
             ExecKind::Rclone(_) => 3,
+            ExecKind::Smb(_) => 2,
         };
         for _ in 0..threads {
             let (q, tx, inner, kind) = (e.queue.clone(), tx.clone(), inner.clone(), e.kind.clone());
@@ -500,7 +506,7 @@ impl State {
             if !self.seen.insert((machine, f.dev, f.ino)) {
                 return None;
             }
-        } else if !self.seen_paths.insert((machine, path_key(&f.path, cfg!(windows) && machine == usize::MAX))) {
+        } else if !self.seen_paths.insert((machine, path_key(&f.path, (cfg!(windows) && machine == usize::MAX) || matches!(self.execs[exec].kind, ExecKind::Smb(_))))) {
             return None;
         }
         let is_cloud = cloud.is_some();
@@ -689,7 +695,50 @@ fn list_place(place: usize, spec: &Spec, min_size: u64, inner: &Arc<Inner>, tx: 
         }
         Spec::Ssh { host, path } => list_ssh(place, host, path, min_size, inner, tx),
         Spec::Rclone(remote) => list_rclone(place, remote, min_size, inner, tx),
+        Spec::Smb(url) => list_smb(place, url, min_size, inner, tx),
     }
+}
+
+/// Lists a folder on a share, one folder at a time; paths are from the top of the share.
+fn list_smb(place: usize, url: &str, min_size: u64, inner: &Arc<Inner>, tx: &Sender<Msg>) -> Result<(), String> {
+    let spec = crate::smb::Spec::parse(url).ok_or_else(|| format!("not a share: {url}"))?;
+    let c = &inner.counters[place];
+    let mut dirs = vec![spec.path.clone()];
+    let mut first = true;
+    while let Some(dir) = dirs.pop() {
+        if inner.cancel.load(Ordering::Relaxed) {
+            return Err("cancelled".into());
+        }
+        let entries = match crate::smb::with(&spec, |conn| conn.list(&dir)) {
+            Ok(e) => e,
+            // the place itself is the point: say why it can't be read
+            Err(e) if first => return Err(e.to_string()),
+            Err(_) => {
+                c.errors.fetch_add(1, Ordering::Relaxed);
+                continue;
+            }
+        };
+        first = false;
+        for e in entries {
+            let rel = if dir.is_empty() { e.name.clone() } else { format!("{dir}/{}", e.name) };
+            if e.link {
+                continue;
+            }
+            if e.dir {
+                if !walk::skip_dir(&e.name) {
+                    dirs.push(rel);
+                }
+                continue;
+            }
+            c.files.fetch_add(1, Ordering::Relaxed);
+            c.bytes.fetch_add(e.size, Ordering::Relaxed);
+            if e.size >= min_size.max(1) {
+                let f = Found { path: format!("/{rel}"), size: e.size, mtime: e.mtime, dev: 0, ino: 0, nlink: 1, clone: None };
+                let _ = tx.send(Msg::Found { place, f, cloud: None });
+            }
+        }
+    }
+    Ok(())
 }
 
 fn list_ssh(place: usize, host: &str, path: &str, min_size: u64, inner: &Arc<Inner>, tx: &Sender<Msg>) -> Result<(), String> {
@@ -874,6 +923,12 @@ fn hash_worker(q: Arc<Queue>, tx: Sender<Msg>, inner: Arc<Inner>, kind: ExecKind
                 inner.read.fetch_add(job.size, Ordering::Relaxed);
                 r
             }
+            ExecKind::Smb(url) => match crate::smb::Spec::parse(url) {
+                Some(spec) => crate::smb::File::open(&spec, job.path.trim_start_matches('/'))
+                    .map_err(|e| e.to_string())
+                    .and_then(|mut f| hash::of(&mut f, job.kind, job.size, &inner.cancel, &inner.read)),
+                None => Err(format!("not a share: {url}")),
+            },
         };
         if tx.send(Msg::Hashed { idx: job.idx, kind: job.kind, result }).is_err() {
             break;

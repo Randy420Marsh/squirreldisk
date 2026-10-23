@@ -307,6 +307,10 @@ mod tests {
                 include_str!("ui/cloud.rs"),
                 include_str!("ui/fx.rs"),
                 include_str!("ui/app.rs"),
+                include_str!("ui/smb.rs"),
+                include_str!("ui/pick.rs"),
+                include_str!("ui/preview.rs"),
+                include_str!("disks.rs"),
                 include_str!("i18n.rs"),
             ]
             .join("\n");
