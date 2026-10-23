@@ -181,9 +181,11 @@ Last full run: commit `dbbd6f2` on 2026-10-23. All 6 test jobs and all 8 desktop
 | Arch Linux, x86_64 | ✓ in an Arch container | `.pkg.tar.zst` |
 | macOS (Apple silicon runner) | ✓ | universal `.dmg` (Apple silicon and Intel) |
 | Windows (latest runner), x86_64 | ✓, plus the command-line shim and the MSI | `.msi`, portable `.exe` |
-| Android 11 or later, arm64 | built only; tried by hand (below) | `.apk` |
+| Android 11 (API 30) or later, arm64 | built only; tried by hand on Android 16 (API 36), below | `.apk` |
 
-Tried by hand as well: Ubuntu 24.04 on X11 (the main development machine), small screens down to 360x780 in portrait and 800x480 in landscape on a nested X server, SMB 1, 2 and 3 (with SMB 3 encryption) against local Samba test servers, and the Android build on the Android 16 emulator and on a OnePlus phone. The Android version is exploratory: it scans local storage and SMB shares, without SSH, cloud storage or the Trash.
+Tried by hand as well: Ubuntu 24.04 on X11 (the main development machine), small screens down to 360x780 in portrait and 800x480 in landscape on a nested X server, SMB 1, 2 and 3 (with SMB 3 encryption) against local Samba test servers, and the Android build on Android 16 (API 36), both on the emulator and on a OnePlus 12R. The Android version is exploratory: it scans local storage and SMB shares, without SSH, cloud storage or the Trash.
+
+Android versions: the APK is built for API 36 and asks for at least API 30, so it should install on Android 11 and every later version. It needs a 64-bit ARM device (arm64-v8a) and works on phones with 4 KB or 16 KB memory pages. Only Android 16 has actually been tried. Android 11 to 15 should work but are untested, and 32-bit and x86 devices aren't supported. The emulator runs it through Android's ARM translation.
 
 ## Build from source
 

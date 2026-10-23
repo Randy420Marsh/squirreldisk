@@ -257,8 +257,12 @@ jobs:
         with:
           targets: aarch64-linux-android
       - uses: Swatinem/rust-cache@v2
-      - name: SDK platform and build-tools
-        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "build-tools;36.0.0" > /dev/null
+      # the NDK the local builds use: the runner's own is older and has no
+      # compiler for API 36
+      - name: SDK platform, build-tools and NDK
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "build-tools;36.0.0" "ndk;30.0.16248370" > /dev/null
+          echo "ANDROID_NDK=$ANDROID_HOME/ndk/30.0.16248370" >> "$GITHUB_ENV"
       # with the same key every build installs over the last one; without it
       # each run makes its own, and Android asks to uninstall first
       - name: Signing key
